@@ -4,7 +4,7 @@ save_data_on_exit = True
 save_history = True
 save_non_project_files = False
 project_type = 'empty-project-type'
-recent_files = ['main_GCopula_GMM.py', 'MODULES/COPULAS/GC_GMm_models.py', 'MODULES/COPULAS/GC_GMm_eigen_functions.py']
+recent_files = ['..\\test_gpups.py', 'run_GPU.py']
 
 [main]
 version = 0.2.0
