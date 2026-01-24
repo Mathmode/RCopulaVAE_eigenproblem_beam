@@ -1,0 +1,251 @@
+import numpy as np
+import tensorflow as tf
+import matplotlib.pyplot as plt
+from scipy.interpolate import griddata
+
+# -------------------------------------------------------------------------
+# OPTIMIZED PAIRWISE CALCULATIONS (Vectorized)
+# -------------------------------------------------------------------------
+
+@tf.function(jit_compile=True)
+def compute_pairwise_macs_tf(modes_true, modes_pred):
+    """
+    Computes MAC efficiently. Handles both Cross-Product (N vs H) and Element-wise (N,H vs N,H).
+    
+    Args:
+        modes_true:  Tensor. Shape (N, C, M) OR (N, H, C, M)
+        modes_pred:  Tensor. Shape (H, C, M) OR (N, H, C, M)
+        
+    Returns:
+        macs: (N, H, Modes) Tensor containing MAC values.
+    """
+    # Check ranks to determine einsum string
+    rank_true = tf.rank(modes_true)
+    rank_pred = tf.rank(modes_pred)
+    
+    # Case 1: Standard Cross Product (N, C, M) vs (H, C, M) -> (N, H, M)
+    # This is efficient (no tiling needed)
+    if rank_true == 3 and rank_pred == 3:
+        dot_product = tf.einsum('ncm, hcm -> nhm', modes_true, modes_pred)
+        
+        norm_sq_true = tf.reduce_sum(tf.square(modes_true), axis=1) # (N, M)
+        norm_sq_pred = tf.reduce_sum(tf.square(modes_pred), axis=1) # (H, M)
+        
+        denominator = tf.multiply(norm_sq_true[:, None, :], norm_sq_pred[None, :, :])
+        
+    # Case 2: Tiled/Aligned Inputs (N, H, C, M) vs (N, H, C, M) -> (N, H, M)
+    # Or mixed cases where one is tiled.
+    else:
+        # We assume standard element-wise broadcasting on N, H dimensions is desired if 4D is passed
+        # '...' handles (N, H) or (N) or (H) prefixes automatically
+        dot_product = tf.einsum('...cm, ...cm -> ...m', modes_true, modes_pred)
+        
+        norm_sq_true = tf.reduce_sum(tf.square(modes_true), axis=-2) # (... M)
+        norm_sq_pred = tf.reduce_sum(tf.square(modes_pred), axis=-2) # (... M)
+        
+        denominator = tf.multiply(norm_sq_true, norm_sq_pred)
+
+    numerator = tf.square(dot_product)
+    denominator = denominator + 1e-8 # Safety
+    
+    macs = numerator / denominator
+    return tf.clip_by_value(macs, 0.0, 1.0)
+
+def compute_pairwise_likelihood_matrix(freqs_true, freqs_pred, 
+                                       mrot_true, pred_rotmodes, 
+                                       mvert_true, pred_vertmodes,
+                                       sigma_freq=0.075, sigma_phi=0.075):
+    """
+    Computes the Likelihood Matrix for ALL test samples against ALL cloud points.
+    Robust to shape variations (N, F vs N, H, F).
+    
+    Args:
+        freqs_true: (N, F) or (N, H, F) True frequencies
+        freqs_pred: (H, F) or (N, H, F) Predicted frequencies
+        mrot_true: (N, C, M) or (N, H, C, M) True rotational modes
+        pred_rotmodes: (H, C, M) or (N, H, C, M) Predicted rotational modes
+        ...
+        
+    Returns:
+        likelihood_matrix: (N, H) Probability matrix
+        energy_matrix: (N, H) Negative log-likelihood
+    """
+    
+    f_test = tf.cast(freqs_true, tf.float32)
+    f_cloud = tf.cast(freqs_pred, tf.float32)
+    
+    # --- 1. Frequency Term (Smart Broadcasting) ---
+    # We want final shape (N, H, F)
+    
+    # If f_test is (N, F), add axes -> (N, 1, F)
+    if len(f_test.shape) == 2:
+        f_test_exp = f_test[:, None, :]
+    else:
+        f_test_exp = f_test # Assume (N, H, F)
+        
+    # If f_cloud is (H, F), add axes -> (1, H, F)
+    if len(f_cloud.shape) == 2:
+        f_cloud_exp = f_cloud[None, :, :]
+    else:
+        f_cloud_exp = f_cloud # Assume (N, H, F)
+
+    # Subtraction will now broadcast correctly without exploding memory
+    # (N, H, F) - (N, H, F) -> OK
+    # (N, 1, F) - (1, H, F) -> OK (Cross product)
+    freq_err = tf.math.log(f_test_exp + 1e-8) - tf.math.log(f_cloud_exp + 1e-8)
+    
+    # Sum over frequencies F (axis 2)
+    term_freq = tf.reduce_sum(tf.square(freq_err), axis=2) / (2 * sigma_freq**2)
+    
+    # --- 2. Mode Shape Terms (Smart MAC) ---
+    # The updated compute_pairwise_macs_tf handles shape checking internally
+    mr_test = tf.cast(mrot_true, tf.float32)
+    mr_cloud = tf.cast(pred_rotmodes, tf.float32)
+    mv_test = tf.cast(mvert_true, tf.float32)
+    mv_cloud = tf.cast(pred_vertmodes, tf.float32)
+    
+    macs_rot = compute_pairwise_macs_tf(mr_test, mr_cloud)
+    macs_vert = compute_pairwise_macs_tf(mv_test, mv_cloud)
+    
+    # MSE-like metric: 2*(1 - sqrt(MAC))
+    # Sum over modes M (last axis)
+    loss_rot = tf.reduce_sum(2.0 * (1.0 - tf.sqrt(macs_rot)), axis=-1)
+    loss_vert = tf.reduce_sum(2.0 * (1.0 - tf.sqrt(macs_vert)), axis=-1)
+    
+    term_rot = loss_rot / (2 * sigma_phi**2)
+    term_vert = loss_vert / (2 * sigma_phi**2)
+    
+    # --- 3. Total Energy ---
+    # Shape (N, H)
+    energy = term_freq + term_rot + term_vert
+    
+    # Likelihood
+    likelihoods = tf.exp(-energy)
+    
+    return likelihoods.numpy(), energy.numpy()
+
+# -------------------------------------------------------------------------
+# EXISTING UTILITIES (Helper functions)
+# -------------------------------------------------------------------------
+
+def compute_likelihood_numpy(freqs_true, freqs_pred, macs_rot, macs_vert, sigma_freq=0.075, sigma_phi=0.075, shift_energy=True):
+    """
+    Computes Likelihood p(m|z) from numpy arrays using Log-Frequency error (consistent with training).
+    
+    Args:
+        freqs_true: (..., n_freqs) Array of true frequencies.
+        freqs_pred: (..., n_freqs) Array of predicted frequencies (from QMC/Grid).
+        macs_rot:   (..., n_modes) Array of Rotational MAC values.
+        macs_vert:  (..., n_modes) Array of Vertical MAC values.
+        sigma_freq: Frequency uncertainty (e.g. 0.075).
+        sigma_phi:  Mode shape uncertainty (e.g. 0.075).
+        shift_energy: If True, subtracts min(energy) before exp to prevent underflow (returns unnormalized shape).
+        
+    Returns:
+        likelihoods: Array of likelihood values.
+        energy: Array of energy values (negative log-likelihood).
+    """
+    # 1. Frequency Term: Use LOGARITHMIC Error (Relative Error)
+    # Using raw difference (true - pred) with small Sigma causes massive energy explosion for high frequencies.
+    freq_err = np.log(freqs_true + 1e-8) - np.log(freqs_pred + 1e-8)
+    # Sum over frequencies (last axis)
+    term_freq = np.sum(np.square(freq_err), axis=-1) / (2 * sigma_freq**2)
+    
+    # 2. Mode Shape Terms: MSE of MACs
+    # Energy = Sum[ 2 * (1 - sqrt(MAC)) ] / (2 * Sigma^2)
+    
+    # Check if input MACs have mode dimension, sum if necessary
+    if macs_rot.ndim > 1:
+        # Sum over modes (last axis)
+        term_rot = np.sum(2 * (1 - np.sqrt(np.maximum(macs_rot, 0))), axis=-1) / (2 * sigma_phi**2)
+    else:
+        term_rot = (2 * (1 - np.sqrt(np.maximum(macs_rot, 0)))) / (2 * sigma_phi**2)
+
+    if macs_vert.ndim > 1:
+        term_vert = np.sum(2 * (1 - np.sqrt(np.maximum(macs_vert, 0))), axis=-1) / (2 * sigma_phi**2)
+    else:
+        term_vert = (2 * (1 - np.sqrt(np.maximum(macs_vert, 0)))) / (2 * sigma_phi**2)
+
+    # 3. Total Energy
+    energy = term_freq + term_rot + term_vert
+    
+    # 4. Safe Exponentiation
+    # If energy is very high (e.g., 500), exp(-500) is 0 (Underflow).
+    # For visualization/maps, we only care about relative peaks.
+    # We shift energy so the minimum is 0 (max likelihood is 1.0).
+    if shift_energy:
+        energy_shifted = energy - np.min(energy)
+        likelihoods = np.exp(-energy_shifted)
+    else:
+        likelihoods = np.exp(-energy)
+        
+    return likelihoods, energy
+
+def plot_likelihood_surface(z1, z2, likelihoods, method='interpolation'):
+    """
+    Efficiently plots the likelihood surface given scattered or flattened coordinates.
+    
+    Args:
+        z1 (array): Array of shape (N,) for the first dimension (e.g., Biofouling).
+        z2 (array): Array of shape (N,) for the second dimension (e.g., Anchoring).
+        likelihoods (array): Array of shape (N,) containing p(m|z).
+        method (str): 'interpolation' (smoothest, uses griddata cubic) or 
+                      'triangulation' (fastest, uses tricontourf).
+    """
+    
+    plt.figure(figsize=(10, 8))
+    
+    if method == 'triangulation':
+        # Method 1: Tricontourf
+        # Increased levels to 100 to reduce banding artifacts
+        cntr = plt.tricontourf(z1, z2, likelihoods, levels=100, cmap='viridis')
+        
+    elif method == 'interpolation':
+        # Method 2: Grid Interpolation (Smoothest)
+        # Creates a regular grid and interpolates values onto it. 
+        
+        # Create a finer grid (300x300 pixels) for high resolution
+        grid_x, grid_y = np.mgrid[0:1:300j, 0:1:300j]
+        
+        # Interpolate using 'cubic' for smooth curves (linear produces sharp edges)
+        try:
+            grid_z = griddata((z1, z2), likelihoods, (grid_x, grid_y), method='cubic')
+        except Exception:
+            # Fallback to linear if cubic fails (e.g., too few points)
+            print("Cubic interpolation failed, falling back to linear.")
+            grid_z = griddata((z1, z2), likelihoods, (grid_x, grid_y), method='linear')
+        
+        # Clip negative values if cubic interpolation overshoots near zero probability
+        grid_z = np.clip(grid_z, 0, None)
+        
+        # Use 100 levels for a smooth gradient look
+        cntr = plt.contourf(grid_x, grid_y, grid_z, levels=100, cmap='viridis')
+        
+    plt.colorbar(cntr, label='Likelihood $p(m|z)$')
+    plt.xlabel('Damage Feature $z_1$ (e.g., Biofouling)')
+    plt.ylabel('Damage Feature $z_2$ (e.g., Anchoring)')
+    plt.title(f'Posterior Ground Truth Map (N={len(likelihoods)})')
+    plt.xlim(0, 1)
+    plt.ylim(0, 1)
+    plt.show()
+
+# ---------------------------------------------------------
+# Dummy usage example to demonstrate functionality
+# ---------------------------------------------------------
+if __name__ == "__main__":
+    # 1. Simulate N=8000 scattered points (Quasi-Monte Carlo style)
+    N = 8000
+    z1_dummy = np.random.rand(N)
+    z2_dummy = np.random.rand(N)
+    
+    # 2. Create a dummy likelihood function (e.g., a Gaussian peak at 0.7, 0.3)
+    # This simulates your physics model output
+    def dummy_likelihood_func(x, y):
+        dist_sq = (x - 0.7)**2 + (y - 0.3)**2
+        return np.exp(-dist_sq * 20) # Sharp peak
+
+    likelihood_dummy = dummy_likelihood_func(z1_dummy, z2_dummy)
+
+    # 3. Plot
+    print(f"Plotting surface for {N} points...")
+    plot_likelihood_surface(z1_dummy, z2_dummy, likelihood_dummy, method='interpolation')
