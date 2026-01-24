@@ -17,6 +17,39 @@ from MODULES.COPULAS.GC_GMm_architectures import Fully_connected_enc_GC, Copula_
 from MODULES.COPULAS.GC_GMm_eigen_functions import Solve_eigenproblem, SolveEigenproblemStable, assemble_global_Kmatrices
 
 
+class IntervalBijector:
+    """
+    Handles the transformation between the bounded physical space [low, high]
+    and the unbounded latent space (-inf, inf).
+    """
+    def __init__(self, low=0.05, high=1.0):
+        self.low = tf.constant(low, dtype=tf.float32)
+        self.high = tf.constant(high, dtype=tf.float32)
+        self.range = self.high - self.low
+
+    def forward_transform(self, z):
+        """Unbounded z -> Bounded alpha"""
+        # alpha = low + (high-low) * sigmoid(z)
+        return self.low + self.range * tf.math.sigmoid(z)
+
+    def inverse_transform(self, x):
+        """Bounded alpha -> Unbounded z"""
+        # z = logit( (alpha - low) / (high - low) )
+        # Clipping for numerical stability to avoid log(0) inside logit
+        x_norm = (x - self.low) / self.range
+        x_norm = tf.clip_by_value(x_norm, 1e-6, 1.0 - 1e-6) 
+        return tf.math.log(x_norm / (1.0 - x_norm))
+
+    def log_det_jacobian(self, z):
+        """
+        Calculates log | d_alpha / d_z |
+        Used to correct the likelihood loss when transforming densities.
+        """
+        s = tf.math.sigmoid(z)
+        # derivative = range * s * (1-s)
+        # log_det = log(range) + log(s) + log(1-s)
+        return tf.math.log(self.range) + tf.math.log(s) + tf.math.log(1.0 - s)
+
 @tf.function(jit_compile = True)
 def calculate_MAC(modes_true, modes_pred):
     # TODO explain the function operations and translate to Keras
@@ -117,6 +150,10 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         # self.Eigen_solver = SolveEigenproblemStable(num_dofs, n_modes, Mfree, L_inv)
         self.Copula_sampling_layer = Copula_pdf_layer(n_dims, num_gaussians, num_samples)
 
+        # Helper for Logit-Normal Transformation
+        # We assign it to self.bijector. 
+        # Note: If loading weights or restoring model, ensure this init is called.
+        self.bijector = IntervalBijector(low=0.05, high=1.0)
         self.epsi = epsi #wight factor for the regularization term in the loss 
         self.num_gaussians = num_gaussians
         self.n_dims = n_dims
@@ -144,7 +181,15 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
 
     
         ## CREATE SAMPLES FROM THE DISTRIBUTIONAL LEARNING MODEL USING COPULA SAMPLING LAYER
-        inputs_to_sampling = [self.means, self.scales, self.weight_vals, self.offdiag_elems, self.diag_elems]
+        # inputs_to_sampling = [self.means, self.scales, self.weight_vals, self.offdiag_elems, self.diag_elems]
+        inputs_to_sampling = {
+        'means': self.means,
+        'scales': self.scales,
+        'weight_vals': self.weight_vals,
+        'offdiag_elems': self.offdiag_elems,
+        'diag_elems': self.diag_elems
+    }
+        
         self.marginal_samples, self.copula_samples, self.LT_matrices = self.Copula_sampling_layer(inputs_to_sampling)
         self.reshaped_marginal_samples = tf.reshape(self.marginal_samples, (-1, self.n_dims)) #to take Shape (Batch_size, n_dims)
         self.reshaped_copula_samples  = tf.reshape(self.copula_samples, (-1, self.n_dims))
@@ -236,24 +281,59 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         
     
         return log_prob_joint_normal - log_prob_marginals_standard
+
+    def Marginal_pdf_logprob(self, y_true, y_pred):
+        """
+        Calculates log P(alpha_samples) using the Change of Variables formula.
+        log P(alpha) = log P(z) - log |det J|
+
+        Note: This evaluates the probability of the SAMPLED points, not y_true.
+        """
+        
+        # 1. Use the Latent Z Samples generated in call()
+        # These are unbounded samples (-inf, inf)
+        z_samples = self.reshaped_marginal_samples
+
+        # 2. Calculate log P(z) using Gaussian Mixture Marginals
+        # Since 'z' space is unbounded, we use standard Normal distributions (not Truncated).
+        gm = tfd.MixtureSameFamily(
+            mixture_distribution=tfd.Categorical(probs=self.reshaped_weight_vals),
+            components_distribution=tfd.Normal(loc=self.reshaped_means, scale=self.reshaped_scales)
+        )
+        
+        # Log Probability of z samples under the predicted Gaussian parameters
+        # This tells us how likely the samples z are under the distribution N(mu, sigma)
+        log_prob_z = tf.math.log(gm.prob(z_samples) + 1e-9)
+        
+        # 3. Calculate Jacobian Correction: log |d_alpha / d_z|
+        # We need this to convert the density from Z-space to Alpha-space
+        log_det_jac = self.bijector.log_det_jacobian(z_samples)
+        
+        # 4. Apply Change of Variables
+        # log P(alpha) = log P(z) - log |det J|
+        log_prob_alpha_marginal = log_prob_z - log_det_jac
+        
+        # Sum over dimensions to get total log prob per sample vector
+        return tf.reduce_sum(log_prob_alpha_marginal, axis=-1)
     
     
+    # def Marginal_pdf_logprob(self,y_true, y_pred):
+    #     '''
+    #     #This one is used for Gaussian marginal directly (known inverse CDF)
+    #     Here we calculate the log probability of the samples over the marginal distributions 
+    #     We have n_dims marginals to consider. 
+    #     The inputs are taken from the self, and include the marginal_samples, and the marginals parameters 
+    #     The output will be the log_probs with shape [batch_size, num_samples]
+    #     '''
+    #     # Taking into account that here we have only one gaussian, we can neglect the dimension of num_gaussians as it is simply 1. 
+    #     gaussian_marginals = tfd.TruncatedNormal(loc=self.reshaped_means[:,0,:], scale=self.reshaped_scales[:,0,:], low=-0.0001, high=1.0001)
+    #     # This is producing one logprob value for each dimension 
+    #     log_prob_marginals = tf.math.log(gaussian_marginals.prob(self.reshaped_marginal_samples)+ 1e-06)  
+    #     # According to the equation (see paper), log(SUM) = SUM(logs): 
+    #     log_prob_marginal = tf.math.reduce_sum(log_prob_marginals,axis = -1)    # to sum in the axis of n_dims        
+    #     return log_prob_marginal
     
-    def Marginal_pdf_logprob(self,y_true, y_pred):
-        '''
-        #This one is used for Gaussian marginal directly (known inverse CDF)
-        Here we calculate the log probability of the samples over the marginal distributions 
-        We have n_dims marginals to consider. 
-        The inputs are taken from the self, and include the marginal_samples, and the marginals parameters 
-        The output will be the log_probs with shape [batch_size, num_samples]
-        '''
-        # Taking into account that here we have only one gaussian, we can neglect the dimension of num_gaussians as it is simply 1. 
-        gaussian_marginals = tfd.TruncatedNormal(loc=self.reshaped_means[:,0,:], scale=self.reshaped_scales[:,0,:], low=-0.0001, high=1.0001)
-        # This is producing one logprob value for each dimension 
-        log_prob_marginals = tf.math.log(gaussian_marginals.prob(self.reshaped_marginal_samples)+ 1e-06)  
-        # According to the equation (see paper), log(SUM) = SUM(logs): 
-        log_prob_marginal = tf.math.reduce_sum(log_prob_marginals,axis = -1)    # to sum in the axis of n_dims        
-        return log_prob_marginal
+
     
     
     def Joint_copula_dens_term(self,y_true, y_pred):
@@ -297,6 +377,7 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         
         # config['Solve_eigenproblem'] = tf.keras.utils.deserialize_keras_object(config['Solve_eigenproblem'])
         return cls(**config)
+    
 
 
 # class My_Copula_VAE(tf.keras.Model):

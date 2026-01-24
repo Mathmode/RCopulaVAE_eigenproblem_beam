@@ -10,6 +10,75 @@ import tensorflow_probability as tfp
 tfd = tfp.distributions
 import numpy as np 
 
+class BetaMixtureSamplingLayer(tf.keras.layers.Layer):
+    """
+    Handles sampling (Gumbel-Softmax) AND Log-Probability computation for Beta Mixtures.
+    Includes fixes for numerical stability (NaN prevention).
+    """
+    def __init__(self, n_dims, num_components, temperature=0.5, **kwargs):
+        super(BetaMixtureSamplingLayer, self).__init__(**kwargs)
+        self.n_dims = n_dims
+        self.num_components = num_components
+        self.temperature = temperature
+
+    def call(self, inputs):
+        alphas, betas, logits = inputs
+        
+        # FIX 3: Ensure alphas and betas are strictly positive. 
+        # Even if Softplus is applied in Encoder, a redundant check/clip here is safe.
+        alphas = tf.maximum(alphas, 1e-4)
+        betas = tf.maximum(betas, 1e-4)
+
+        # --- Reshape Inputs ---
+        alphas_r = tf.reshape(alphas, (-1, self.num_components, self.n_dims))
+        betas_r = tf.reshape(betas, (-1, self.num_components, self.n_dims))
+        
+        # --- Construct TFP Distribution ---
+        comp_dist = tfd.Independent(
+            tfd.Beta(concentration1=alphas_r, concentration0=betas_r),
+            reinterpreted_batch_ndims=1 
+        )
+        
+        mixture = tfd.MixtureSameFamily(
+            mixture_distribution=tfd.Categorical(logits=logits),
+            components_distribution=comp_dist
+        )
+
+        # --- Gumbel-Softmax Sampling ---
+        # Note: We define the function inside or outside, but for vectorized_map 
+        # it's often cleaner to assume inputs are tensors.
+        def sample_single_batch(args):
+            l, a, b = args
+            
+            # A. Sample from Beta (K, D)
+            beta_d = tfd.Beta(concentration1=a, concentration0=b)
+            z_comp = beta_d.sample()
+            
+            # B. Gumbel Weights (K,)
+            # FIX 4: Safety minval/maxval for log(u)
+            u = tf.random.uniform(tf.shape(l), minval=1e-6, maxval=1.0 - 1e-6)
+            gumbels = -tf.math.log(-tf.math.log(u))
+            y_soft = tf.nn.softmax((l + gumbels) / self.temperature)
+            
+            # C. Mix (D,)
+            return tf.reduce_sum(tf.expand_dims(y_soft, -1) * z_comp, axis=0)
+
+        # Run sampling
+        z_samples = tf.vectorized_map(
+            sample_single_batch, 
+            (logits, alphas_r, betas_r)
+        )
+        
+        # FIX 5: Clip samples before calculating log_prob
+        # If z is 0 or 1, Beta log_prob is infinite/NaN.
+        z_samples_clipped = tf.clip_by_value(z_samples, 1e-5, 1.0 - 1e-5)
+        
+        # --- Compute Log Probability ---
+        log_prob_z = mixture.log_prob(z_samples_clipped)
+        
+        return z_samples_clipped, log_prob_z
+
+    
 
 @tf.function(jit_compile = True)
 def build_correlation_matrices_from_cholesky(off_diag_elements, diag_elements, n_dims):
@@ -55,6 +124,83 @@ def build_correlation_matrices_from_cholesky(off_diag_elements, diag_elements, n
 
     
 
+
+# class BetaMixtureSamplingLayer(tf.keras.layers.Layer):
+#     """
+#     Handles sampling (Gumbel-Softmax) AND Log-Probability computation for Beta Mixtures.
+#     Replaces the complex Gaussian Mixture layer. No truncation needed.
+#     """
+#     def __init__(self, n_dims, num_components, temperature=0.5, **kwargs):
+#         super(BetaMixtureSamplingLayer, self).__init__(**kwargs)
+#         self.n_dims = n_dims
+#         self.num_components = num_components
+#         self.temperature = temperature
+
+#     def call(self, inputs):
+#         alphas, betas, logits = inputs
+        
+#         # --- 1. Validation ---
+#         tf.debugging.assert_all_finite(logits, "Logits NaN/Inf")
+#         tf.debugging.assert_all_finite(alphas, "Alphas NaN/Inf")
+#         tf.debugging.assert_all_finite(betas,  "Betas NaN/Inf")
+
+#         # --- 2. Reshape Inputs ---
+#         # Final Shape: (Batch, K, D)        
+#         alphas_r = tf.reshape(alphas, (-1, self.num_components, self.n_dims))
+#         betas_r = tf.reshape(betas, (-1, self.num_components, self.n_dims))
+        
+#         # --- 3. Construct TFP Distribution (Batch-wise) ---
+#         # We can build the distribution object directly on the full batch
+#         # TFP supports batch shapes natively, so vectorized_map is often not strictly needed 
+#         # for log_prob, but useful for the custom Gumbel sampling logic.
+        
+#         # Component: Independent Beta per dimension
+#         # Event shape: (D,), Batch shape: (Batch, K)
+#         comp_dist = tfd.Independent(
+#             tfd.Beta(concentration1=alphas_r, concentration0=betas_r),
+#             reinterpreted_batch_ndims=1 
+#         )
+        
+#         # Mixture: Categorical weights
+#         # Event shape: (D,), Batch shape: (Batch,)
+#         mixture = tfd.MixtureSameFamily(
+#             mixture_distribution=tfd.Categorical(logits=logits),
+#             components_distribution=comp_dist
+#         )
+
+#         # --- 4. Gumbel-Softmax Sampling (Differentiable) ---
+#         # We use a localized function to keep the graph clean or reuse the logic
+#         def sample_single_batch(args):
+#             l, a, b = args
+#             # Reconstruct distributions for single sample logic
+#             # (Note: simpler to just do math here for Gumbel)
+            
+#             # A. Sample from Beta (K, D)
+#             beta_d = tfd.Beta(concentration1=a, concentration0=b)
+#             z_comp = beta_d.sample()
+            
+#             # B. Gumbel Weights (K,)
+#             u = tf.random.uniform(tf.shape(l), minval=1e-5, maxval=1.0 - 1e-5)
+#             gumbels = -tf.math.log(-tf.math.log(u))
+#             y_soft = tf.nn.softmax((l + gumbels) / self.temperature)
+            
+#             # C. Mix (D,)
+#             return tf.reduce_sum(tf.expand_dims(y_soft, -1) * z_comp, axis=0)
+
+#         # Run sampling
+#         # Reshape inputs for map: alphas/betas need to be (Batch, K, D) which matches alphas_r
+#         z_samples = tf.vectorized_map(
+#             sample_single_batch, 
+#             (logits, alphas_r, betas_r)
+#         )
+        
+#         # --- 5. Compute Log Probability ---
+#         # We calculate the exact log_prob of the sampled z under the mixture
+#         log_prob_z = mixture.log_prob(z_samples)
+        
+#         return z_samples, log_prob_z
+
+
 # @tf.function(jit_compile=True)  # Keep jit_compile=True for performance, but remove temporarily for debugging
 def gaussian_copula_samples(LT_matrices, n_dims, n_samples):
     def draw_samples(LT_matrices_batch):
@@ -89,7 +235,7 @@ def gaussian_copula_samples(LT_matrices, n_dims, n_samples):
         condition,
         body,
         [initial_samples],
-        maximum_iterations=2500
+        maximum_iterations=2000## OJO CON ESTO: estaba en 2500
     )[0]
 
     return copula_samples
@@ -111,7 +257,7 @@ def gaussian_marginal_samples(locs, scales, copula_samples):
     return marginal_samples
 
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-#$$$$$$$$$$$$$$$$$$$$$$$$for multimodal marginals. not used $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$4
+#$$$$$$$$$$$$$$$$$$$$$$$$for multimodal marginals. not used because the inverse CDF of this has no explicit form and thus we need to approximate it, with a strong copmputational effort (PROHIBITIVE) $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$4
 
 @tf.function(jit_compile=True)
 def multimodal_marginal(x, locs, scales, weight_vals):

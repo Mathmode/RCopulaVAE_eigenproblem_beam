@@ -78,7 +78,7 @@ def gaussian_copula_samples(LT_matrices, n_dims, n_samples):
 
       # Use tf.where to combine:  If valid, keep old; otherwise, use new.
       updated_samples = tf.where(valid_mask, samples, new_samples)
-      return updated_samples
+      return [updated_samples]
 
     # Initialize samples, processing the entire batch at once.
     initial_samples = draw_samples(LT_matrices)
@@ -106,8 +106,13 @@ def gaussian_marginal_samples(locs, scales, copula_samples):
         locs with shape (batch_size, num_gaussians =1, n_dims)
         scales with shape (batch_size, num_gaussians =1, n_dims)
         copula_samples with shape (batch_size, num_samples, n_dims)
+    UPDATED FOR WARPED GAUSSIAN (Logit-Normal):
+    This function now generates the LATENT Z samples, which are unbounded (-inf, inf).
+    We use a standard Normal distribution instead of TruncatedNormal.
+    The bounding to [0.2, 1.0] happens later via the Bijector.
+    
     """
-    marginal_samples = tfd.TruncatedNormal(loc=locs, scale=scales, low=-0.001, high=1.001).quantile(copula_samples)
+    marginal_samples = tfd.Normal(loc=locs, scale=scales).quantile(copula_samples)
     return marginal_samples
 
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -132,7 +137,8 @@ def multimodal_marginal(x, locs, scales, weight_vals):
     """
     gm = tfd.MixtureSameFamily(
         mixture_distribution=tfd.Categorical(probs=weight_vals),
-        components_distribution=tfd.TruncatedNormal(loc=locs, scale=scales, low =0.0, high=1.0)
+        components_distribution=tfd.Normal(loc=locs, scale=scales)
+
 
     )
     mixture_probs = gm.prob(x)

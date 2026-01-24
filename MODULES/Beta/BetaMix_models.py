@@ -9,26 +9,108 @@ Created on Fri Feb 14 12:49:18 2025
 import tensorflow as tf
 import tensorflow.keras as K 
 import tensorflow_probability as tfp
-import math as m
 tfb = tfp.bijectors
 tfd = tfp.distributions
 
-from MODULES.COPULAS.GC_GMm_architectures import Fully_connected_enc_GC, Copula_pdf_layer, Fully_connected_dec
-from MODULES.COPULAS.GC_GMm_eigen_functions import Solve_eigenproblem, SolveEigenproblemStable, assemble_global_Kmatrices
+from MODULES.Beta.BetaMix_architectures import Fully_connected_enc_Beta, Fully_connected_dec
+from MODULES.Beta.BetaMix_functions import BetaMixtureSamplingLayer
+from MODULES.Beta.BetaMix_eigen_functions import Solve_eigenproblem, assemble_global_Kmatrices
+
+
+# @tf.function(jit_compile = True)
+# def calculate_MAC(modes_true, modes_pred):
+#     # TODO explain the function operations and translate to Keras
+#     modes_true_transp = tf.einsum('BCM -> BMC', modes_true)
+#     modes_pred_transp  = tf.einsum('BCM -> BMC', modes_pred)
+        
+#     MAC_numer = tf.math.square(tf.einsum('BMC, BCM -> BM', modes_true_transp, modes_pred))
+#     MAC_denom  = tf.multiply(tf.einsum('BMC, BCM -> BM', modes_true_transp, modes_true), tf.einsum('BMC, BCM -> BM', modes_pred_transp, modes_pred))
+#     MAC = tf.divide(MAC_numer, MAC_denom)
+#     #MAC dimension is (Batch_size, N_modes)
+#     return MAC
 
 
 @tf.function(jit_compile = True)
 def calculate_MAC(modes_true, modes_pred):
-    # TODO explain the function operations and translate to Keras
+    """
+    Calculates Modal Assurance Criterion with numerical stability protection.
+    """
+    # modes shape: (Batch, Coords, Modes)
     modes_true_transp = tf.einsum('BCM -> BMC', modes_true)
     modes_pred_transp  = tf.einsum('BCM -> BMC', modes_pred)
         
     MAC_numer = tf.math.square(tf.einsum('BMC, BCM -> BM', modes_true_transp, modes_pred))
-    MAC_denom  = tf.multiply(tf.einsum('BMC, BCM -> BM', modes_true_transp, modes_true), tf.einsum('BMC, BCM -> BM', modes_pred_transp, modes_pred))
+    
+    denom_true = tf.einsum('BMC, BCM -> BM', modes_true_transp, modes_true)
+    denom_pred = tf.einsum('BMC, BCM -> BM', modes_pred_transp, modes_pred)
+    
+    # FIX 1: Add epsilon to denominator to prevent NaN if a mode vector is zero
+    MAC_denom  = tf.multiply(denom_true, denom_pred) + 1e-8
+    
     MAC = tf.divide(MAC_numer, MAC_denom)
-    #MAC dimension is (Batch_size, N_modes)
+    
+    # FIX 2: Clip MAC to [0, 1] to prevent sqrt(-val) or values > 1 due to float error
+    MAC = tf.clip_by_value(MAC, 0.0, 1.0)
+    
     return MAC
 
+# @tf.function(jit_compile = True)
+# def orient_modes_tf(x):
+#     """
+#     Orients vectors in a tensor such that the element with the maximum 
+#     absolute magnitude is always positive.
+    
+#     Args:
+#         x: Tensor of shape (Batch, Coords, Modes) -> e.g., (5000, 6, 5)
+        
+#     Returns:
+#         Tensor of the same shape with oriented vectors.
+#     """
+#     # Ensure input is a tensor
+#     x = tf.convert_to_tensor(x)
+    
+#     # 1. Find the index of the max absolute value along the coordinates axis (axis=1)
+#     # Output shape: (Batch, Modes)
+#     max_indices = tf.argmax(tf.abs(x), axis=1)
+    
+#     # 2. Create a one-hot mask to extract the actual values at these indices
+#     # We specify axis=1 so the 'depth' (6 coords) is inserted at the correct dimension.
+#     # Output shape: (Batch, Coords, Modes) matches x
+#     mask = tf.one_hot(max_indices, depth=tf.shape(x)[1], axis=1, dtype=x.dtype)
+    
+#     # 3. Extract the peak values (the values at the max indices)
+#     # Element-wise multiply + sum reduces the Coordinate axis, leaving just the peak values.
+#     # Output shape: (Batch, Modes)
+#     peak_values = tf.reduce_sum(x * mask, axis=1)
+    
+#     # 4. Determine the sign of these peak values (-1 or 1)
+#     signs = tf.math.sign(peak_values)
+    
+#     # 5. Handle the edge case where the peak is 0 (sign is 0)
+#     # If sign is 0, we default it to 1 to leave the vector unchanged.
+#     signs = tf.where(tf.equal(signs, 0), tf.ones_like(signs), signs)
+    
+#     # 6. Reshape for broadcasting: (Batch, Modes) -> (Batch, 1, Modes)
+#     # This allows us to multiply the (Batch, 6, Modes) tensor correctly.
+#     signs = tf.expand_dims(signs, axis=1)
+    
+#     # 7. Apply the signs to the original tensor
+#     return x * signs
+
+@tf.function(jit_compile = True)
+def orient_modes_tf(x):
+    """
+    Orients vectors in a tensor such that the element with the maximum 
+    absolute magnitude is always positive.
+    """
+    x = tf.convert_to_tensor(x)
+    max_indices = tf.argmax(tf.abs(x), axis=1)
+    mask = tf.one_hot(max_indices, depth=tf.shape(x)[1], axis=1, dtype=x.dtype)
+    peak_values = tf.reduce_sum(x * mask, axis=1)
+    signs = tf.math.sign(peak_values)
+    signs = tf.where(tf.equal(signs, 0), tf.ones_like(signs), signs)
+    signs = tf.expand_dims(signs, axis=1)
+    return x * signs
 
 
 class ForwardModel(K.Model):
@@ -55,15 +137,13 @@ class ForwardModel(K.Model):
         return dict(list(base_config.items()) + list(config.items()))
 
 
-
-
-class Inverse_Copula_Model(tf.keras.Model):
-    def __init__(self, input_dim_encoder, n_dims, num_gaussians, num_samples, **kwargs):
-        super(Inverse_Copula_Model, self).__init__()
+class Inverse_Beta_Model(tf.keras.Model):
+    def __init__(self, input_dim_encoder, n_dims, num_components, num_samples, **kwargs):
+        super(Inverse_Beta_Model, self).__init__()
         self.n_dims = n_dims
-        self.num_gaussians = num_gaussians
+        self.num_components = num_components
         self.num_samples = num_samples
-        self.FC_encoder = Fully_connected_enc_GC(input_dim_encoder, n_dims, num_gaussians)
+        self.FC_encoder = Fully_connected_enc_Beta(input_dim_encoder, n_dims, num_components)
 
     def call(self, inputs):
         [self.freq_data, self.rot_modes_data, self.vert_modes_data, self.alpha_factors] = inputs
@@ -71,57 +151,55 @@ class Inverse_Copula_Model(tf.keras.Model):
         self.flat_rot_modes = tf.reshape(self.rot_modes_data, [-1, self.rot_modes_data.shape[1]* self.rot_modes_data.shape[2]])
         self.flat_vert_modes = tf.reshape(self.vert_modes_data, [-1, self.vert_modes_data.shape[1]* self.vert_modes_data.shape[2]])
         self.modal_data = K.layers.Concatenate(axis=1)([self.freq_data, self.flat_vert_modes, self.flat_rot_modes])
-
-        Copula_parameters = self.FC_encoder(self.modal_data)
-        n_correlation_factors = self.n_dims*(self.n_dims-1)//2
-
-        means, scales, weight_vals, offdiag_elems, diag_elems = tf.split(Copula_parameters, [self.n_dims * self.num_gaussians,
-                                                        self.n_dims*self.num_gaussians,
-                                                        self.n_dims*self.num_gaussians,
-                                                        n_correlation_factors,
-                                                        self.n_dims
-                                                        ], axis=-1)
         
-
-        # RESHAPE TO SEPARATE by num of components (Gaussians in the mixture for each variable) and num_dims (number of variables)
-        means = tf.reshape(means, (-1,self.num_gaussians, self.n_dims))
-        scales = tf.reshape(scales, (-1, self.num_gaussians, self.n_dims))
-        weight_vals = tf.reshape(weight_vals, (-1, self.num_gaussians, self.n_dims))
-        weight_vals = tf.nn.softmax(weight_vals, axis = 1) # apply the weight normalization to the weights of each dimension (contaning n_gaussians)
+        Betamix_parameters = self.FC_encoder(self.modal_data)
         
+        # Split output
+        raw_alphas, raw_betas, logits = tf.split(Betamix_parameters, [
+            self.n_dims*self.num_components, 
+            self.n_dims*self.num_components, 
+            self.num_components], axis = -1)
         
-        return means, scales, weight_vals, offdiag_elems, diag_elems
+        # FIX 6: CRITICAL! Enforce positivity constraints on Alpha and Beta parameters.
+        # Neural networks output real numbers (-inf, inf). Beta needs (>0).
+        # We use Softplus + epsilon.
+        alphas = tf.math.softplus(raw_alphas) + 1e-4
+        betas = tf.math.softplus(raw_betas) + 1e-4
+        return alphas, betas, logits
     
     def get_config(self):
         config = {
             'n_dims': self.n_dims,
-            'num_gaussians': self.num_gaussians,
+            'num_components': self.num_components,
             'num_samples': self.num_samples
         }
-        base_config = super(Inverse_Copula_Model, self).get_config()
+        base_config = super(Inverse_Beta_Model, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
    
 
 # @tf.function(jit_compile = True)
-class My_CopulaVAE_withEigen(tf.keras.Model):
-    def __init__(self, input_dim, num_dofs, n_elements, n_modes, Ke_matrices, Mfree, L_inv, epsi, n_dims, num_gaussians, num_samples, beta, **kwargs): #We add the bayesian properties (gaussians, dimensions of the latent and samples, selected_features(in case you want to work with only freqs) beta, full_cov, s_lb, s_ub)
-        super(My_CopulaVAE_withEigen, self).__init__()
+class My_BetaVAE_withEigen(tf.keras.Model):
+    def __init__(self, input_dim, num_dofs, n_elements, n_modes, Ke_matrices, Mfree, L_inv, epsi, n_dims, num_components, num_samples, regu_weight, sigma_f, sigma_phi, **kwargs): #We add the bayesian properties (gaussians, dimensions of the latent and samples, selected_features(in case you want to work with only freqs) beta, full_cov, s_lb, s_ub)
+        super(My_BetaVAE_withEigen, self).__init__()
+        self.n_dims = n_dims
         self.num_dofs = num_dofs
         self.n_elements = n_elements
         self.n_modes = n_modes
+        self.num_components = num_components
+
         self.Ke_matrices = Ke_matrices # Known baseline element stiffness matrix (4x4 in 2d beam elements with vcal and rot bending modes)
         self.Mfree = Mfree
         self.L_inv = L_inv
-        self.Encoder_model = Inverse_Copula_Model(input_dim, n_dims, num_gaussians, num_samples)
+        self.Encoder_model = Inverse_Beta_Model(input_dim, n_dims, num_components, num_samples)
         self.Eigen_solver = Solve_eigenproblem(num_dofs, n_modes, Mfree, L_inv)
-        # self.Eigen_solver = SolveEigenproblemStable(num_dofs, n_modes, Mfree, L_inv)
-        self.Copula_sampling_layer = Copula_pdf_layer(n_dims, num_gaussians, num_samples)
+        
+        self.Beta_sampling_layer = BetaMixtureSamplingLayer(n_dims, num_components, temperature = 0.5)
 
         self.epsi = epsi #wight factor for the regularization term in the loss 
-        self.num_gaussians = num_gaussians
-        self.n_dims = n_dims
         self.num_samples = num_samples
-        self.beta = beta
+        self.regu_weight = regu_weight # weight for the regularizign terms (balances the contribution of the reconstruction and the probability terms in the loss)
+        self.sigma_f = sigma_f #these are the new hyperparameters that act as weights in the loss (substitute regu_weight)
+        self.sigma_phi = sigma_phi
             
     def call(self, inputs):
         # Original shapes before flattening: 
@@ -134,41 +212,45 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         self.flat_vert_modes = tf.reshape(self.vert_modes_data, [-1, self.vert_modes_data.shape[1]* self.vert_modes_data.shape[2]])
         self.modal_data = K.layers.Concatenate(axis=1)([self.freq_data, self.flat_vert_modes, self.flat_rot_modes])
         
-        self.means, self.scales, self.weight_vals, self.offdiag_elems, self.diag_elems = self.Encoder_model(inputs)
-        self.means_ext = tf.repeat(self.means[:,tf.newaxis,:,:], self.num_samples, axis = 1)
-        self.reshaped_means = tf.reshape(self.means_ext, [-1,self.num_gaussians, self.n_dims]) # current shape: (batch_size*num_samples, num_gaussians, n_dims)
-        self.scales_ext = tf.repeat(self.scales[:,tf.newaxis,:,:], self.num_samples, axis = 1)
-        self.reshaped_scales = tf.reshape(self.scales_ext, [-1,self.num_gaussians, self.n_dims])  # current shape: (batch_size*num_samples, num_gaussians, n_dims)
-        self.weights_ext = tf.repeat(self.weight_vals[:,tf.newaxis,:,:], self.num_samples, axis = 1)
-        self.reshaped_weight_vals = tf.reshape(self.weights_ext, [-1,self.num_gaussians, self.n_dims])  # current shape: (batch_size*num_samples, num_gaussians, n_dims)
-
-    
-        ## CREATE SAMPLES FROM THE DISTRIBUTIONAL LEARNING MODEL USING COPULA SAMPLING LAYER
-        inputs_to_sampling = [self.means, self.scales, self.weight_vals, self.offdiag_elems, self.diag_elems]
-        self.marginal_samples, self.copula_samples, self.LT_matrices = self.Copula_sampling_layer(inputs_to_sampling)
-        self.reshaped_marginal_samples = tf.reshape(self.marginal_samples, (-1, self.n_dims)) #to take Shape (Batch_size, n_dims)
-        self.reshaped_copula_samples  = tf.reshape(self.copula_samples, (-1, self.n_dims))
-
-        self.LT_matrices_ext =  tf.repeat(self.LT_matrices[:,tf.newaxis,:,:], self.num_samples, axis = 1)
-        self.reshaped_LT_matrices = tf.reshape(self.LT_matrices_ext, [-1,self.n_dims, self.n_dims])
+        self.alphas, self.betas, self.logits,= self.Encoder_model(inputs)
+        self.alphas_ext = tf.repeat(self.alphas[:,tf.newaxis,:], self.num_samples, axis = 1)
+        self.reshaped_alphas = tf.reshape(self.alphas_ext, [-1,self.num_components*self.n_dims]) # current shape: (batch_size*num_samples, num_components*n_dims)
         
+        self.betas_ext = tf.repeat(self.betas[:,tf.newaxis,:], self.num_samples, axis = 1)
+        self.reshaped_betas = tf.reshape(self.betas_ext, [-1, self.num_components*self.n_dims]) # current shape: (batch_size*num_samples, num_components*n_dims)
+
+        self.weights_ext = tf.repeat(self.logits[:,tf.newaxis,:], self.num_samples, axis = 1)
+        self.reshaped_weights = tf.reshape(self.weights_ext, [-1,self.num_components])  # current shape: (batch_size*num_samples, num_gaussians, n_dims)
         
-        reshaped_alpha_factors = self.reshaped_marginal_samples #HEre the latent space represents the alpha factors or reduction factors affecting the stiffness matrix
+        ## CREATE SAMPLES FROM THE DISTRIBUTIONAL LEARNING MODEL USING BETA SAMPLING LAYER
+        # inputs_to_sampling = [self.reshaped_alphas, self.reshaped_betas, self.reshaped_weights]
+        # self.z_samples, self.log_prob_z = self.Beta_sampling_layer(inputs_to_sampling)
+        
+        self.z_samples = self.alpha_factors 
+        self.log_prob_z = tf.math.reduce_mean(self.z_samples,axis = None)
+        
         # # Apply the corresponding factor using einsum(Batch_size, n_elements, 4x4)
-        Ke_matrices_dam = tf.einsum('BE, EKQ -> BEKQ', tf.cast(reshaped_alpha_factors, dtype = tf.float32), tf.cast(self.Ke_matrices, dtype = tf.float32))
+        Ke_matrices_dam = tf.einsum('BE, EKQ -> BEKQ', tf.cast(self.z_samples, dtype = tf.float32), tf.cast(self.Ke_matrices, dtype = tf.float32))
         # Bear in mind that B here is B*H but we keep the same notation for that first dimension. 
         # So now Ke_matrices_dam must have shape (B*H, Elements, K,Q)
-        # KQ indicate the dimension of the element matrix that here is 2x2 since we are in lienar elasticity 
+        # KQ indicate the dimension of the element matrix that here is 2x2=4 since we are in lienar elasticity 
         
         # # Assemble the element matrices to build the global matrix        
         Kfree = assemble_global_Kmatrices(Ke_matrices_dam, self.n_elements,  self.num_samples) # the shape is (Batch_size, n_free, n_free)
 
         # Then we enter the eigensolver (forward) function with this list to produce the eigenfrequencies
-        self.pred_freqs, self.pred_rotmodes, self.pred_vertmodes = self.Eigen_solver(Kfree)
+        #TODO Watch out! REVIEW: we are enforcing the predicted modes to have unit norm. Also we must review the sign. 
+        self.pred_freqs, pred_rotmodes, pred_vertmodes = self.Eigen_solver(Kfree)
+        Rot_norms = tf.linalg.norm(pred_rotmodes, axis=1, keepdims=True)
+        self.pred_rotmodes = orient_modes_tf(pred_rotmodes / Rot_norms)
+        Vert_norms = tf.linalg.norm(pred_rotmodes, axis=1, keepdims=True)
+        self.pred_vertmodes = orient_modes_tf(pred_vertmodes / Vert_norms)
+        
+        
         self.pred_freqs = tf.abs(self.pred_freqs) #to enforce them to be positive***
         #The output of this function is the output of the inverse, i.e., the estimated damage condition described by the alpha factors.
         #They have shape (B*H, D) 
-        return  reshaped_alpha_factors
+        return  self.z_samples
         
     def Freqs_loss(self, y_true, y_pred):
         true_freqs = self.freq_data
@@ -176,13 +258,36 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         #Reshape to accommodate for further steps (final shape: (batch_size*N, n_features)) that will be seen as (None, n_features)
         true_freqs = tf.reshape(tf.transpose(true_freqs, perm = [0,2,1]), [-1,y_true.shape[1]])
         
-        pred_freqs = self.pred_freqs
+        pred_freqs = self.pred_freqs  + 1e-6
+        true_freqs = true_freqs + 1e-6
 
 
         Freqs_sq_error = tf.square(tf.math.log(true_freqs) - tf.math.log(pred_freqs))
         Loss_freqs = tf.math.reduce_mean(Freqs_sq_error, axis = None)
         return Loss_freqs
     
+    
+    def MSE_modes_loss(self, y_true, y_pred):
+        True_rotmodes, True_vertmodes  = self.rot_modes_data, self.vert_modes_data
+        
+        true_rotmodes = tf.repeat(True_rotmodes[:,:,:,tf.newaxis], self.num_samples, axis = 3)
+        true_rotmodes = tf.reshape(tf.transpose(true_rotmodes, perm = [0,3,1,2]), [-1,True_rotmodes.shape[1], True_rotmodes.shape[2]])
+        
+        true_vertmodes = tf.repeat(True_vertmodes[:,:,:, tf.newaxis], self.num_samples, axis = 3)
+        true_vertmodes = tf.reshape(tf.transpose(true_vertmodes, perm = [0,3,1,2]), [-1,True_vertmodes.shape[1], True_vertmodes.shape[2]])
+        
+        pred_rotmodes, pred_vertmodes = self.pred_rotmodes, self.pred_vertmodes
+        
+        #Calculate the MACs
+        Rot_MACs = calculate_MAC(true_rotmodes, pred_rotmodes) #shape: (Batch_Size, n_modes)
+        Vert_MACs = calculate_MAC(true_vertmodes, pred_vertmodes) #shape: (Batch_size, n_modes)
+        
+        # MACs = K.ops.hstack((Rot_MACs, Vert_MACs))
+        MACs = tf.concat([Rot_MACs, Vert_MACs], axis=1)
+        sqrt_MACs = tf.math.sqrt(tf.maximum(MACs, 0.0))
+        MSE_mac = 2*(1-sqrt_MACs)
+        Loss_MSE_MAC = tf.math.reduce_mean(MSE_mac, axis = None)
+        return Loss_MSE_MAC 
 
     def MAC_modes_loss(self, y_true, y_pred):
         True_rotmodes, True_vertmodes  = self.rot_modes_data, self.vert_modes_data
@@ -206,74 +311,149 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         
         return Loss_MAC 
     
-    def Alpha_regularizer(self, y_true, y_pred):
-        min_value = tf.reduce_min(y_pred, axis=-1, keepdims=False)
-        Regularizer = tf.math.reduce_mean( tf.math.reduce_sum(y_pred,axis = -1)-min_value)/(y_pred.shape[-1])-1
-        return self.epsi*Regularizer
+    
+    def Mixture_dens_term(self, y_true, y_pred):
+        """
+        Computes log q(z|x).
+        Since Beta is naturally normalized on [0,1], C = 1 and we don't need integral approximation.
+        We simply maximize the log-probability (maximize entropy).
+        """
+        # self.log_prob_z is computed inside the sampling layer to be efficient
+        # We want to maximize log_prob, so we usually minimize -log_prob.
+        # However, following your previous code structure which returned positive log prob:
+        
+        Mixture_density_loss = tf.reduce_mean(self.log_prob_z)
+
+        # You return this term. In your total loss you likely subtract it 
+        # (or add it if you want to penalize low entropy). 
+        # Usually: Loss = Recon - regu_weight * Entropy
+        # return tf.square(tf.cast(self.regu_weight, dtype=tf.float32)) * Mixture_density_loss
+        return Mixture_density_loss
+
+
+    
+    def ELBO_Beta_loss(self, y_true, y_pred):
+        Posterior_entropy  = self.Mixture_dens_term(y_true, y_pred)
+        Loss_freqs = self.Freqs_loss(y_true,y_pred)
+        Loss_MSE_modes = self.MSE_modes_loss(y_true, y_pred)
+        # Loss_MAC = self.MAC_modes_loss(y_true,y_pred)
+
+        
+        Cfreq = 1/(2*tf.square(tf.cast(self.sigma_f, dtype = tf.float32)))
+        Cphi = 1/(2*tf.square(tf.cast(self.sigma_phi,dtype = tf.float32)))
+    
+        
+        ELBO_loss = Cphi*Loss_MSE_modes + Cfreq*Loss_freqs - Posterior_entropy 
+        return ELBO_loss
+    
+    # def MSE_modes_loss(self, y_true, y_pred):
+    #     """
+    #     Computes the Mean Squared Error (Squared L2 Norm) for mode shapes.
+        
+    #     Assumptions:
+    #     1. Inputs are unit-norm normalized.
+    #     2. Inputs are sign-consistent (e.g., phase aligned).
+        
+    #     Args:
+    #         y_true: Tensor of shape [Batch_size, n_coords, n_modes]
+    #         y_pred: Tensor of shape [Batch_size, n_coords, n_modes]
+            
+    #     Returns:
+    #         Scalar loss value (average squared error per mode).
+    #     """
+        
+    #     # 0. Prepare teh modeshape vectors: 
+    #     True_rotmodes, True_vertmodes  = self.rot_modes_data, self.vert_modes_data
+        
+    #     true_rotmodes = tf.repeat(True_rotmodes[:,:,:,tf.newaxis], self.num_samples, axis = 3)
+    #     true_rotmodes = tf.reshape(tf.transpose(true_rotmodes, perm = [0,3,1,2]), [-1,True_rotmodes.shape[1], True_rotmodes.shape[2]])
+        
+    #     true_vertmodes = tf.repeat(True_vertmodes[:,:,:, tf.newaxis], self.num_samples, axis = 3)
+    #     true_vertmodes = tf.reshape(tf.transpose(true_vertmodes, perm = [0,3,1,2]), [-1,True_vertmodes.shape[1], True_vertmodes.shape[2]])
+    #     pred_rotmodes, pred_vertmodes = self.pred_rotmodes, self.pred_vertmodes
+
+    #     # 1. Calculate squared difference for every element
+    #     # Shape: [Batch_size, n_coords, n_modes]
+    #     squared_diff_rotmodes = tf.square(true_rotmodes - pred_rotmodes)
+    #     squared_diff_vertmodes = tf.square(true_vertmodes - pred_vertmodes)
+    #     squared_diff = tf.concat([squared_diff_rotmodes, squared_diff_vertmodes], axis=1)
+
+        
+    #     # 2. Sum over the coordinate dimension (axis 1)
+    #     # This calculates ||phi_true - phi_pred||^2 for each mode vector.
+    #     # Note: We SUM (not mean) over coords because we want the vector distance.
+    #     # Result Shape: [Batch_size, n_modes]
+    #     per_mode_error = tf.reduce_sum(squared_diff, axis=1)
+        
+    #     # 3. Average over the Batch and the Number of Modes
+    #     # This gives you the scalar loss to minimize.
+    #     loss = tf.reduce_mean(per_mode_error)
+        
+    #     return loss
      
     
-    def Copula_pdf_logprob(self,y_true, ypred):
-        """
-        Compute the log-likelihood of the joint PDF defined by a Gaussian copula and Gaussian mixture marginals.
+    # def Copula_pdf_logprob(self, y_true, ypred):
+    #     """
+    #     Compute the log-likelihood of the joint PDF defined by a Gaussian copula and Gaussian mixture marginals.
         
-        Args:
-            locs: Tensor of shape [n_modes, n_dims], means of the Gaussian mixture components.
-            scales: Tensor of shape [n_modes, n_dims], standard deviations of the Gaussian mixture components.
-            weights: Tensor of shape [n_modes, n_dims], weights of the Gaussian mixture components.
-            correlation_matrix: Tensor of shape [n_dims, n_dims], correlation matrix of the Gaussian copula.
-            samples: Tensor of shape [n_samples, n_dims], the observed data.
+    #     Args:
+    #         locs: Tensor of shape [n_modes, n_dims], means of the Gaussian mixture components.
+    #         scales: Tensor of shape [n_modes, n_dims], standard deviations of the Gaussian mixture components.
+    #         weights: Tensor of shape [n_modes, n_dims], weights of the Gaussian mixture components.
+    #         correlation_matrix: Tensor of shape [n_dims, n_dims], correlation matrix of the Gaussian copula.
+    #         samples: Tensor of shape [n_samples, n_dims], the observed data.
     
-        Returns:
-            log_likelihood: Tensor of shape [], the log-likelihood of the joint PDF.
-        """
+    #     Returns:
+    #         log_likelihood: Tensor of shape [], the log-likelihood of the joint PDF.
+    #     """
                 
-        # Convert uniform samples to standard normal
-        normal_samples = tfd.Normal(loc=0.0, scale=1.0).quantile(self.reshaped_copula_samples)
-        mvn = tfd.MultivariateNormalTriL(loc = tf.zeros(self.n_dims), scale_tril = self.reshaped_LT_matrices)
+    #     # Convert uniform samples to standard normal
+    #     normal_samples = tfd.Normal(loc=0.0, scale=1.0).quantile(self.reshaped_copula_samples)
+    #     mvn = tfd.MultivariateNormalTriL(loc = tf.zeros(self.n_dims), scale_tril = self.reshaped_LT_matrices)
 
-        log_prob_joint_normal = tf.math.log(mvn.prob(normal_samples)+1e-07)
-        log_prob_marginals_standard = tf.reduce_sum(tf.math.log(tfd.Normal(0.0, 1.0).prob(normal_samples)+1e-07), axis=-1)      
+    #     log_prob_joint_normal = tf.math.log(mvn.prob(normal_samples)+1e-07)
+    #     log_prob_marginals_standard = tf.reduce_sum(tf.math.log(tfd.Normal(0.0, 1.0).prob(normal_samples)+1e-07), axis=-1)      
         
     
-        return log_prob_joint_normal - log_prob_marginals_standard
+    #     return log_prob_joint_normal - log_prob_marginals_standard
     
     
     
-    def Marginal_pdf_logprob(self,y_true, y_pred):
-        '''
-        #This one is used for Gaussian marginal directly (known inverse CDF)
-        Here we calculate the log probability of the samples over the marginal distributions 
-        We have n_dims marginals to consider. 
-        The inputs are taken from the self, and include the marginal_samples, and the marginals parameters 
-        The output will be the log_probs with shape [batch_size, num_samples]
-        '''
-        # Taking into account that here we have only one gaussian, we can neglect the dimension of num_gaussians as it is simply 1. 
-        gaussian_marginals = tfd.TruncatedNormal(loc=self.reshaped_means[:,0,:], scale=self.reshaped_scales[:,0,:], low=-0.0001, high=1.0001)
-        # This is producing one logprob value for each dimension 
-        log_prob_marginals = tf.math.log(gaussian_marginals.prob(self.reshaped_marginal_samples)+ 1e-06)  
-        # According to the equation (see paper), log(SUM) = SUM(logs): 
-        log_prob_marginal = tf.math.reduce_sum(log_prob_marginals,axis = -1)    # to sum in the axis of n_dims        
-        return log_prob_marginal
+    # def Marginal_pdf_logprob(self,y_true, y_pred):
+    #     '''
+    #     #This one is used for Gaussian marginal directly (known inverse CDF)
+    #     Here we calculate the log probability of the samples over the marginal distributions 
+    #     We have n_dims marginals to consider. 
+    #     The inputs are taken from the self, and include the marginal_samples, and the marginals parameters 
+    #     The output will be the log_probs with shape [batch_size, num_samples]
+    #     '''
+    #     # Taking into account that here we have only one gaussian, we can neglect the dimension of num_gaussians as it is simply 1. 
+    #     gaussian_marginals = tfd.TruncatedNormal(loc=self.reshaped_means[:,0,:], scale=self.reshaped_scales[:,0,:], low=-0.0001, high=1.0001)
+    #     # This is producing one logprob value for each dimension 
+    #     log_prob_marginals = tf.math.log(gaussian_marginals.prob(self.reshaped_marginal_samples)+ 1e-06)  
+    #     # According to the equation (see paper), log(SUM) = SUM(logs): 
+    #     log_prob_marginal = tf.math.reduce_sum(log_prob_marginals,axis = -1)    # to sum in the axis of n_dims        
+    #     return log_prob_marginal
     
     
-    def Joint_copula_dens_term(self,y_true, y_pred):
-        Copula_density_term = self.Copula_pdf_logprob(y_true, y_pred)
-        Marginal_logprob_term = self.Marginal_pdf_logprob(y_true,y_pred)   
+    # def Joint_copula_dens_term(self,y_true, y_pred):
+    #     Copula_density_term = self.Copula_pdf_logprob(y_true, y_pred)
+    #     Marginal_logprob_term = self.Marginal_pdf_logprob(y_true,y_pred)   
         
-        joint_copula_logprob = tf.math.reduce_mean(Copula_density_term + Marginal_logprob_term, axis = None)
-        joint_copula_logprob = tf.math.square(tf.cast(self.beta, dtype=tf.float32))* (joint_copula_logprob)
-        return joint_copula_logprob
+    #     joint_copula_logprob = tf.math.reduce_mean(Copula_density_term + Marginal_logprob_term, axis = None)
+    #     joint_copula_logprob = tf.math.square(tf.cast(self.beta, dtype=tf.float32))* (joint_copula_logprob)
+    #     return joint_copula_logprob
     
     
     
-    def ELBO_Copula_loss(self, y_true, y_pred):
-        Joint_copula_logprob  = self.Joint_copula_dens_term(y_true, y_pred)
-        Loss_freqs = self.Freqs_loss(y_true,y_pred)
-        Loss_MAC = self.MAC_modes_loss(y_true,y_pred)
-        Regularizer = self.Alpha_regularizer(y_true, y_pred)
+    # def ELBO_Copula_loss(self, y_true, y_pred):
+    #     Joint_copula_logprob  = self.Joint_copula_dens_term(y_true, y_pred)
+    #     Loss_freqs = self.Freqs_loss(y_true,y_pred)
+    #     Loss_MAC = self.MAC_modes_loss(y_true,y_pred)
+    #     Regularizer = self.Alpha_regularizer(y_true, y_pred)
                 
-        ELBO_loss = Loss_MAC + Loss_freqs - Regularizer + Joint_copula_logprob
-        return ELBO_loss
+    #     ELBO_loss = Loss_MAC + Loss_freqs - Regularizer + Joint_copula_logprob
+    #     return ELBO_loss
     
     
     
@@ -289,7 +469,7 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
             'M_free': self.Mfree,
             # 'eigensolver': self.Eigen_solver
         }
-        base_config = super(My_CopulaVAE_withEigen, self).get_config()
+        base_config = super(My_BetaVAE_withEigen, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
     @classmethod

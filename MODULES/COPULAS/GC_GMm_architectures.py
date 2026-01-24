@@ -9,27 +9,27 @@ import tensorflow as tf
 import tensorflow.keras as K 
 from MODULES.COPULAS.GC_GMm_functions import gaussian_copula_samples, build_marginal_samples, gaussian_marginal_samples, build_correlation_matrices_from_cholesky
 import numpy as np 
-from MODULES.TRAINING.rotation_matrices_funtions import copula_batch_givens_rotation
+# from MODULES.TRAINING.rotation_matrices_funtions import copula_batch_givens_rotation
 
 
 # Inverse architecture:
 def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians):
     input1 = K.Input(shape =(input_dim,), name = 'Innnputlayer')
-    lay1 = K.layers.Dense(100, activation = 'relu', kernel_initializer="he_uniform", bias_initializer="zeros",  name='lay1',
+    lay1 = K.layers.Dense(20, activation = 'relu', kernel_initializer="he_uniform", bias_initializer="zeros",  name='lay1',
                       kernel_regularizer=tf.keras.regularizers.l2(0.001))(input1) #Intermediate layers
-    lay2 = K.layers.Dense(150, activation = 'tanh')(lay1) #Intermediate layers
-    lay2 = K.layers.Dense(100, activation = 'relu',  kernel_initializer="he_uniform", bias_initializer="zeros")(lay2) #Intermediate layers
-    lay2 = K.layers.Dense(100, activation = 'relu', kernel_initializer="he_uniform", bias_initializer="zeros")(lay2) #Intermediate layers
-    lay3 = K.layers.Dense(50, activation = 'relu', kernel_initializer="he_uniform", bias_initializer="zeros", name = 'lay4')(lay2) #Intermediate layers
+    lay2 = K.layers.Dense(100, activation = 'tanh')(lay1) #Intermediate layers
+    lay3 = K.layers.Dense(500, activation = 'relu', kernel_initializer="he_uniform", bias_initializer="zeros", name = 'lay4')(lay2) #Intermediate layers
 
     # MEANS
-    means = K.layers.Dense(n_dims*num_gaussians, activation = 'sigmoid',  name = 'means')(lay3)
+    means = K.layers.Dense(n_dims*num_gaussians, activation = 'sigmoid',
+    kernel_initializer='zeros', 
+    bias_initializer=tf.keras.initializers.RandomUniform(minval=-4.0, maxval=4.0), name = 'means')(lay3)
     means = 1e-07 + 0.99 * means  # Example: Scale/shift if needed.  Good practice.
 
     #SIGMAS
     sigmas = K.layers.Dense(n_dims*num_gaussians, activation = 'sigmoid', name = 'stddevs')(lay3)
     sigmas = 1e-07 + 0.99 * sigmas # Scale and shift: sigmas will be in [0.01, 1.00].  ESSENTIAL for stability.
-    
+     
     ## Lmatrix Elements to build directly the lower triangular matrix rather than the correlation
     n_correlations  = n_dims*(n_dims-1)//2
     off_diag_L_elems = K.layers.Dense(n_correlations, activation='linear', name='off_diag_elements')(lay3)
@@ -37,13 +37,10 @@ def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians):
     # off_diag_L_elems = off_diag_L_elems +1e-07 
     diag_L_elems = K.layers.Dense(n_dims, activation = 'softplus', name = 'diag_elements')(lay3)
     diag_L_elems = diag_L_elems+1e-07
-
     #WEIGHTS: first sofplus because the condition of Sumup to 1 must be stasify for each dimension, not for all the weights together.
     weight_vals = K.layers.Dense(n_dims*num_gaussians, activation = 'softplus', name = 'weights')(lay3) # Enforce the weights to be positive only.
     outputs = tf.concat([means, sigmas, weight_vals, off_diag_L_elems, diag_L_elems], axis = 1)
     return K.Model(inputs = input1, outputs = outputs)
-
-
 
 
 class Copula_pdf_layer(tf.keras.layers.Layer):
@@ -54,7 +51,19 @@ class Copula_pdf_layer(tf.keras.layers.Layer):
         self.num_samples = num_samples
 
     def call(self, inputs):
-        means, scales, weight_vals, offdiag_elems, diag_elems  = inputs
+        # means, scales, weight_vals, offdiag_elems, diag_elems  = inputs
+        means = inputs['means']
+        scales = inputs['scales']
+        weight_vals = inputs['weight_vals']
+        offdiag_elems = inputs['offdiag_elems']
+        diag_elems = inputs['diag_elems']
+        # ----------------------------------
+
+        # Validación de seguridad para cazar el error matemático
+        tf.debugging.assert_all_finite(means, "ERROR: means contiene NaNs")
+        tf.debugging.assert_all_finite(scales, "ERROR: scales contiene NaNs")
+        tf.debugging.assert_all_finite(weight_vals, "ERROR: weight_vals contiene NaNs")
+        tf.debugging.assert_all_finite(offdiag_elems, "ERROR: offdiag contiene NaNs")
         # Input validation: Check for NaNs
         tf.debugging.assert_all_finite(means, "means contains NaN or Inf")  # Added check
         tf.debugging.assert_all_finite(scales, "scales contains NaN or Inf")  # Added check

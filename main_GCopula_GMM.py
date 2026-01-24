@@ -5,8 +5,33 @@ Created on Thu Feb 20 16:16:13 2025
 
 @author: afernandez
 """
+import os
+
+# --- BLOQUE CRÍTICO ANTI-COLAPSO ---
+# 1. Desactiva las optimizaciones oneDNN (Causante #1 de crashes en CPUs nuevas)
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
+# 2. Arregla el conflicto de librerías Intel (Causante #2)
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
+# 3. Fuerza el uso de la CPU (Como tú quieres)
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+# -----------------------------------
+
+# AHORA sí importamos el resto
+import runpy
+import sys
+
+
 def main():
+    
     import os
+    # 1. Hide the GPU from TensorFlow (This stops the ptxas crash)
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
+    # 2. Fix the library conflict (This stops the CPU silent crash)
+    os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
     import numpy as np
     import tensorflow as tf
     import tensorflow.keras as K 
@@ -28,7 +53,7 @@ def main():
     n_elements = 5
     n_dofs = 2*(n_elements +1) 
     num_dofs = n_dofs -2 
-    batch_size = 48
+    batch_size = 64
     # nf = 70
     # total_dofs = 2*(num_elements +1) = 12 for 5 elements. From there you must remove 1 dofs at the limit nodes, resulting in 8-2 = 6 as the num_dofs
     Freqs_true_train, Rotmodes_true_train, Vertmodes_true_train, alpha_factors_true_train, Freqs_true_val, Rotmodes_true_val, Vertmodes_true_val, alpha_factors_true_val, Freqs_true_test, Rotmodes_true_test, Vertmodes_true_test, alpha_factors_true_test =  load_data(data_path, batch_size)
@@ -64,8 +89,11 @@ def main():
     beta = 0.073 ## weight factor for the Gaussian Mixture term 
     
     run_eagerly = False # indicate True for debugging   
+
+        
     
-    date = "06Oct_GAUSSIAN_Marginal_"+str(n_elements)+"els"+str(n_modes)+"modes_test_Data17Mar"
+    
+    date = "Jan23_026_WarpedGaussian"+str(n_elements)+"els"+str(n_modes)+"modes_test_Data17Mar"
     starting  = date + "Copula"
     model = My_CopulaVAE_withEigen(input_dim, num_dofs, n_elements, n_modes, Ke_matrices, Mfree, L_inv, epsi, n_dims, num_gaussians, num_samples, beta)
     
@@ -74,15 +102,53 @@ def main():
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
     
-        
+    # 1. Definir la ruta del checkpoint
+    checkpoint_path = os.path.join("Output", "checkpoints", "cp-{epoch:04d}.ckpt")
+    checkpoint_dir = os.path.dirname(checkpoint_path)
+    
+    # 2. ¡IMPORTANTE! Crear la carpeta 'checkpoints' si no existe
+    if not os.path.exists(checkpoint_dir):
+        os.makedirs(checkpoint_dir)
+        print(f"✅ Carpeta de checkpoints creada en: {checkpoint_dir}")
+    
+    # 3. Callback para guardar (Checkpoint)
+    cp_callback = tf.keras.callbacks.ModelCheckpoint(
+        filepath=checkpoint_path, 
+        verbose=1, 
+        save_weights_only=True,
+        save_freq='epoch',
+        period = 50
+    )
+    
+    # 4. Callback para limpiar memoria (Garbage Collector)
+    import gc
+    class MemoryCleaner(tf.keras.callbacks.Callback):
+        def on_epoch_end(self, epoch, logs=None):
+            gc.collect() # Solo usamos gc.collect(), es mas seguro durante el entrenamiento
+                
+    # --- BLOQUE DE RECUPERACIÓN ---
+    # Busca el último checkpoint guardado en la carpeta
+    latest = tf.train.latest_checkpoint(checkpoint_dir)
+    
+    if latest:
+        print(f"🔄 Cargando pesos desde: {latest}")
+        # Cargar pesos (expect_partial evita errores si faltan variables del optimizador)
+        model.load_weights(latest).expect_partial()
+        print("✅ ¡Pesos cargados! Continuamos desde donde se quedó.")
+    else:
+        print("⚠️ No se encontraron checkpoints. Empezando desde cero.")      
+    
     model.compile(optimizer = K.optimizers.Adam(learning_rate = LR), loss = model.ELBO_Copula_loss, metrics = [model.Freqs_loss, model.Copula_pdf_logprob, model.Marginal_pdf_logprob, model.Joint_copula_dens_term], run_eagerly = run_eagerly)
+        
+    # Instanciamos el limpiador
+    # limpiador = MemoryCleaner()
     model_history = model.fit(x = [Freqs_true_train,Rotmodes_true_train, Vertmodes_true_train, alpha_factors_true_train],
       y = alpha_factors_true_train,
       batch_size = batch_size,
       epochs = n_epochs,
       shuffle = True,
       validation_data = ([Freqs_true_val,Rotmodes_true_val, Vertmodes_true_val, alpha_factors_true_val], alpha_factors_true_val),
-      callbacks = [])
+      callbacks = [cp_callback, MemoryCleaner()])
     
     
     Problem_info = {
