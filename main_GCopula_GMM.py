@@ -5,32 +5,32 @@ Created on Thu Feb 20 16:16:13 2025
 
 @author: afernandez
 """
-import os
+# import os
 
-# --- BLOQUE CRÍTICO ANTI-COLAPSO ---
-# 1. Desactiva las optimizaciones oneDNN (Causante #1 de crashes en CPUs nuevas)
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+# # --- BLOQUE CRÍTICO ANTI-COLAPSO ---
+# # 1. Desactiva las optimizaciones oneDNN (Causante #1 de crashes en CPUs nuevas)
+# os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
-# 2. Arregla el conflicto de librerías Intel (Causante #2)
-os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+# # 2. Arregla el conflicto de librerías Intel (Causante #2)
+# os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
-# 3. Fuerza el uso de la CPU (Como tú quieres)
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+# # 3. Fuerza el uso de la CPU (Como tú quieres)
+# os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 # -----------------------------------
 
-# AHORA sí importamos el resto
-import runpy
-import sys
+# # AHORA sí importamos el resto
+# import runpy
+# import sys
 
 
 def main():
     
     import os
-    # 1. Hide the GPU from TensorFlow (This stops the ptxas crash)
-    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+    # # 1. Hide the GPU from TensorFlow (This stops the ptxas crash)
+    # os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
-    # 2. Fix the library conflict (This stops the CPU silent crash)
-    os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+    # # 2. Fix the library conflict (This stops the CPU silent crash)
+    # os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
     import numpy as np
     import tensorflow as tf
@@ -53,7 +53,7 @@ def main():
     n_elements = 5
     n_dofs = 2*(n_elements +1) 
     num_dofs = n_dofs -2 
-    batch_size = 64
+    batch_size = 256
     # nf = 70
     # total_dofs = 2*(num_elements +1) = 12 for 5 elements. From there you must remove 1 dofs at the limit nodes, resulting in 8-2 = 6 as the num_dofs
     Freqs_true_train, Rotmodes_true_train, Vertmodes_true_train, alpha_factors_true_train, Freqs_true_val, Rotmodes_true_val, Vertmodes_true_val, alpha_factors_true_val, Freqs_true_test, Rotmodes_true_test, Vertmodes_true_test, alpha_factors_true_test =  load_data(data_path, batch_size)
@@ -78,22 +78,22 @@ def main():
     Mfree, Ke_matrices, L_inv = load_known_matrices(data_path, n_elements)
     
     ## Trainign specifications, required for the folder name 
-    n_epochs = 50000
-    LR = 1e-04 # with exponent 05 I observe some moments of total loss increasing, which corresponds to a bad training.......
+    n_epochs = 10000
+    LR = 1e-05 # with exponent 05 I observe some moments of total loss increasing, which corresponds to a bad training.......
     epsi = 0.0 #Regularizer to find one single damaged element
     
     ## Bayesian specifications for the Gaussian Mixture approach 
     num_gaussians = 1
     n_dims  = alpha_factors_true_train.shape[1]
     num_samples = 1
-    beta = 0.073 ## weight factor for the Gaussian Mixture term 
+    beta = 0.06 ## weight factor for the Gaussian Mixture term 
     
     run_eagerly = False # indicate True for debugging   
 
         
     
     
-    date = "Jan23_026_WarpedGaussian"+str(n_elements)+"els"+str(n_modes)+"modes_test_Data17Mar"
+    date = "local_Feb02_026_WarpedGaussian"+str(n_elements)+"els"+str(n_modes)+"modes_test_Data17Mar"
     starting  = date + "Copula"
     model = My_CopulaVAE_withEigen(input_dim, num_dofs, n_elements, n_modes, Ke_matrices, Mfree, L_inv, epsi, n_dims, num_gaussians, num_samples, beta)
     
@@ -168,9 +168,6 @@ def main():
     model.save_weights(os.path.join(folder_path, "model_weights.weights.h5"))
     history_path = os.path.join(folder_path, 'model_history.npy')
     np.save(os.path.join(history_path), model_history.history, allow_pickle=True)
-                       
-    
-    
     
     
     plot_trainval_loss(model, folder_path)
@@ -240,67 +237,6 @@ def main():
     
 
 
-
-
-    # from scipy.stats import norm
-    # from matplotlib import pyplot as plt
-    
-    
-    # def plot_truncated_gaussian_pdf(id_num, mean, scale, xmin=0.05, xmax=0.95, num_points=1000):
-    #     """Plots a *truncated* Gaussian PDF.  Values outside [xmin, xmax] are 0."""
-    #     if scale <= 0:
-    #         raise ValueError("Scale (standard deviation) must be positive.")
-    
-    #     x = np.linspace(xmin, xmax, num_points)
-        
-    #     # Calculate PDF *only* within the range.
-    #     pdf_values = norm.pdf(x, loc=mean, scale=scale)
-    
-    #      # Renormalize the PDF so that the area under the curve within [xmin, xmax] is 1.
-    #     cdf_max = norm.cdf(xmax, loc=mean, scale=scale)
-    #     cdf_min = norm.cdf(xmin, loc=mean, scale=scale)
-    #     normalization_factor = cdf_max - cdf_min
-    #     pdf_values /= normalization_factor
-    
-    
-    #     plt.figure(figsize=(8, 6))
-    #     plt.plot(x, pdf_values, label=f'z{id_num} Marginal PDF ')
-    #     plt.xlabel('x')
-    #     plt.ylabel('Probability Density')
-    #     plt.xlim(xmin, xmax)
-    #     plt.ylim(bottom=0)  # Very important for truncated PDFs
-    #     plt.grid(True)
-    #     plt.legend()
-    #     plt.show()
-    
-    # # positions = [11,20,25,34,45]
-    # positions = [11]
-    # # 
-    # # for i in range(len(positions)):
-    # #     pos = positions[i]
-    # #     # pos = i
-    # #     z_true = alpha_factors_true_test[pos,:]
-    # #     locs = test_means[pos,:]    #shape (num_gaussians, n_dims)
-    # #     scales = test_scales[pos,:]
-    # #     weight_vals = test_weight_vals[pos,:]         
-    # #     LT_matrix = test_LT_matrices[pos,:]
-    # #     n_samples = 500
-    # #     plot_multimodal_joint_pdf(locs, scales, weight_vals, LT_matrix, n_dims, n_samples, i, z_true, folder_path)
-    # #     # plot_Gaussianmarg_joint_pdf(locs, scales, LT_matrix, n_dims, n_samples,i, z_true, folder_path)
-        
-    
-    
-    
-    
-    # for i in range(len(positions)):
-    #     pos = positions[i]
-    #     means = test_means[pos,0,:]
-    #     scales = test_scales[pos,0,:]
-    #     for j in range(len(means)):
-    #         plot_truncated_gaussian_pdf(j+1, means[j], scales[j], xmin=0.05, xmax=0.95, num_points=1000)
-            
-
-        
         
 
 ############## This operation allows to exeute functions in the script     

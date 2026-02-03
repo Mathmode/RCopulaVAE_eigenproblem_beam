@@ -7,8 +7,7 @@ Created on Thu Jan 23 17:56:02 2025
 """
 import tensorflow as tf
 import tensorflow.keras as K 
-from MODULES.COPULAS.GC_GMm_functions import gaussian_copula_samples, build_marginal_samples, gaussian_marginal_samples, build_correlation_matrices_from_cholesky
-import numpy as np 
+from MODULES.COPULAS.GC_GMm_functions import gaussian_copula_samples, gaussian_marginal_samples, build_correlation_matrices_from_cholesky
 # from MODULES.TRAINING.rotation_matrices_funtions import copula_batch_givens_rotation
 
 
@@ -51,12 +50,12 @@ class Copula_pdf_layer(tf.keras.layers.Layer):
         self.num_samples = num_samples
 
     def call(self, inputs):
-        # means, scales, weight_vals, offdiag_elems, diag_elems  = inputs
-        means = inputs['means']
-        scales = inputs['scales']
-        weight_vals = inputs['weight_vals']
-        offdiag_elems = inputs['offdiag_elems']
-        diag_elems = inputs['diag_elems']
+        means, scales, weight_vals, offdiag_elems, diag_elems  = inputs
+        # means = inputs['means']
+        # scales = inputs['scales']
+        # weight_vals = inputs['weight_vals']
+        # offdiag_elems = inputs['offdiag_elems']
+        # diag_elems = inputs['diag_elems']
         # ----------------------------------
 
         # Validación de seguridad para cazar el error matemático

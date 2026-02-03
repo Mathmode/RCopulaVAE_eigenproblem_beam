@@ -1,3 +1,10 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Feb  2 17:41:59 2026
+
+@author: anafd
+"""
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -14,8 +21,8 @@ tfb = tfp.bijectors
 tfd = tfp.distributions
 
 from MODULES.COPULAS.GC_GMm_architectures import Fully_connected_enc_GC, Copula_pdf_layer, Fully_connected_dec
-# from MODULES.COPULAS.GC_GMm_eigen_functions import Solve_eigenproblem, SolveEigenproblemStable, assemble_global_Kmatrices
-from MODULES.COPULAS.GC_GMm_GPU_eigen_functions import Solve_eigenproblem, SolveEigenproblemStable, assemble_global_Kmatrices
+from MODULES.COPULAS.GC_GMm_eigen_functions import Solve_eigenproblem, SolveEigenproblemStable, assemble_global_Kmatrices
+
 
 class IntervalBijector:
     """
@@ -147,6 +154,7 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         self.L_inv = L_inv
         self.Encoder_model = Inverse_Copula_Model(input_dim, n_dims, num_gaussians, num_samples)
         self.Eigen_solver = Solve_eigenproblem(num_dofs, n_modes, Mfree, L_inv)
+        # self.Eigen_solver = SolveEigenproblemStable(num_dofs, n_modes, Mfree, L_inv)
         self.Copula_sampling_layer = Copula_pdf_layer(n_dims, num_gaussians, num_samples)
 
         # Helper for Logit-Normal Transformation
@@ -165,10 +173,10 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         # vert_modes_data size: (Batch_size, free displ. coordinates, n_modes)
         # rot_modes_data size: (Batch_size, free rot. coordinates, n_modes)
         [self.freq_data, self.rot_modes_data, self.vert_modes_data, self.alpha_factors] = inputs
-        # #We now flatten the modeshapes to feed the Inverse DNN with a vector that contains all the frequencies and mode shapes.         
-        # self.flat_rot_modes = tf.reshape(self.rot_modes_data, [-1, self.rot_modes_data.shape[1]* self.rot_modes_data.shape[2]])
-        # self.flat_vert_modes = tf.reshape(self.vert_modes_data, [-1, self.vert_modes_data.shape[1]* self.vert_modes_data.shape[2]])
-        # self.modal_data = K.layers.Concatenate(axis=1)([self.freq_data, self.flat_vert_modes, self.flat_rot_modes])
+        #We now flatten the modeshapes to feed the Inverse DNN with a vector that contains all the frequencies and mode shapes.         
+        self.flat_rot_modes = tf.reshape(self.rot_modes_data, [-1, self.rot_modes_data.shape[1]* self.rot_modes_data.shape[2]])
+        self.flat_vert_modes = tf.reshape(self.vert_modes_data, [-1, self.vert_modes_data.shape[1]* self.vert_modes_data.shape[2]])
+        self.modal_data = K.layers.Concatenate(axis=1)([self.freq_data, self.flat_vert_modes, self.flat_rot_modes])
         
         self.means, self.scales, self.weight_vals, self.offdiag_elems, self.diag_elems = self.Encoder_model(inputs)
         self.means_ext = tf.repeat(self.means[:,tf.newaxis,:,:], self.num_samples, axis = 1)
@@ -178,37 +186,51 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         self.weights_ext = tf.repeat(self.weight_vals[:,tf.newaxis,:,:], self.num_samples, axis = 1)
         self.reshaped_weight_vals = tf.reshape(self.weights_ext, [-1,self.num_gaussians, self.n_dims])  # current shape: (batch_size*num_samples, num_gaussians, n_dims)
 
-        # 2. SAMPLING: Generate samples in Unbounded Space 'z'
-        # Copula_sampling_layer calls 'gaussian_marginal_samples' (updated to be Normal, not Truncated)
-        inputs_to_sampling = [self.means, self.scales, self.weight_vals, self.offdiag_elems, self.diag_elems]
-        self.marginal_samples_z, self.copula_samples_u, self.LT_matrices = self.Copula_sampling_layer(inputs_to_sampling)
-        
-        self.reshaped_alpha_samples = tf.reshape(self.marginal_samples_z, (-1, self.n_dims)) 
-        self.reshaped_copula_samples  = tf.reshape(self.copula_samples_u, (-1, self.n_dims))
     
+        ## CREATE SAMPLES FROM THE DISTRIBUTIONAL LEARNING MODEL USING COPULA SAMPLING LAYER
+        # inputs_to_sampling = [self.means, self.scales, self.weight_vals, self.offdiag_elems, self.diag_elems]
+        inputs_to_sampling = {
+        'means': self.means,
+        'scales': self.scales,
+        'weight_vals': self.weight_vals,
+        'offdiag_elems': self.offdiag_elems,
+        'diag_elems': self.diag_elems
+    }
+        
+        self.marginal_samples, self.copula_samples, self.LT_matrices = self.Copula_sampling_layer(inputs_to_sampling)
+        self.reshaped_marginal_samples = tf.reshape(self.marginal_samples, (-1, self.n_dims)) #to take Shape (Batch_size, n_dims)
+        self.reshaped_copula_samples  = tf.reshape(self.copula_samples, (-1, self.n_dims))
+
         self.LT_matrices_ext =  tf.repeat(self.LT_matrices[:,tf.newaxis,:,:], self.num_samples, axis = 1)
         self.reshaped_LT_matrices = tf.reshape(self.LT_matrices_ext, [-1,self.n_dims, self.n_dims])
         
-        # 3. TRANSFORM: Map unbounded 'z' to physical 'alpha' [0.05, 1.0]
-        # This is the "Warping" step
-        # self.reshaped_alpha_samples = self.bijector.forward_transform(self.reshaped_marginal_samples_z)
-    
-        # 4. DECODER: Solve Physics using Physical Alphas
-        # Use vectorized assembly (GPU Optimized)
-        Ke_matrices_dam = tf.einsum('BE, EKQ -> BEKQ', tf.cast(self.reshaped_alpha_samples, dtype = tf.float32), tf.cast(self.Ke_matrices, dtype = tf.float32))
-        Kfree = assemble_global_Kmatrices(Ke_matrices_dam, self.n_elements,  self.num_samples) 
-    
-        self.pred_freqs, self.pred_rotmodes, self.pred_vertmodes = self.Eigen_solver(Kfree)
-        self.pred_freqs = tf.abs(self.pred_freqs) 
         
-        # Return physical alphas (useful for plotting/debugging)
-        return self.reshaped_alpha_samples
-    
+        reshaped_alpha_factors = self.reshaped_marginal_samples #HEre the latent space represents the alpha factors or reduction factors affecting the stiffness matrix
+        # # Apply the corresponding factor using einsum(Batch_size, n_elements, 4x4)
+        Ke_matrices_dam = tf.einsum('BE, EKQ -> BEKQ', tf.cast(reshaped_alpha_factors, dtype = tf.float32), tf.cast(self.Ke_matrices, dtype = tf.float32))
+        # Bear in mind that B here is B*H but we keep the same notation for that first dimension. 
+        # So now Ke_matrices_dam must have shape (B*H, Elements, K,Q)
+        # KQ indicate the dimension of the element matrix that here is 2x2 since we are in lienar elasticity 
+        
+        # # Assemble the element matrices to build the global matrix        
+        Kfree = assemble_global_Kmatrices(Ke_matrices_dam, self.n_elements,  self.num_samples) # the shape is (Batch_size, n_free, n_free)
+
+        # Then we enter the eigensolver (forward) function with this list to produce the eigenfrequencies
+        self.pred_freqs, self.pred_rotmodes, self.pred_vertmodes = self.Eigen_solver(Kfree)
+        self.pred_freqs = tf.abs(self.pred_freqs) #to enforce them to be positive***
+        #The output of this function is the output of the inverse, i.e., the estimated damage condition described by the alpha factors.
+        #They have shape (B*H, D) 
+        return  reshaped_alpha_factors
+        
     def Freqs_loss(self, y_true, y_pred):
         true_freqs = self.freq_data
         true_freqs = tf.repeat(true_freqs[:,:,tf.newaxis], self.num_samples, axis = 2)
+        #Reshape to accommodate for further steps (final shape: (batch_size*N, n_features)) that will be seen as (None, n_features)
         true_freqs = tf.reshape(tf.transpose(true_freqs, perm = [0,2,1]), [-1,y_true.shape[1]])
+        
         pred_freqs = self.pred_freqs
+
+
         Freqs_sq_error = tf.square(tf.math.log(true_freqs) - tf.math.log(pred_freqs))
         Loss_freqs = tf.math.reduce_mean(Freqs_sq_error, axis = None)
         return Loss_freqs
@@ -223,10 +245,13 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         true_vertmodes = tf.repeat(True_vertmodes[:,:,:, tf.newaxis], self.num_samples, axis = 3)
         true_vertmodes = tf.reshape(tf.transpose(true_vertmodes, perm = [0,3,1,2]), [-1,True_vertmodes.shape[1], True_vertmodes.shape[2]])
         
-        pred_rotmodes, pred_vertmodes = self.pred_rotmodes, self.pred_vertmodes
         
-        Rot_MACs = calculate_MAC(true_rotmodes, pred_rotmodes) 
-        Vert_MACs = calculate_MAC(true_vertmodes, pred_vertmodes) 
+        
+        pred_rotmodes, pred_vertmodes = self.pred_rotmodes, self.pred_vertmodes
+        #Calculate the MACs
+        Rot_MACs = calculate_MAC(true_rotmodes, pred_rotmodes) #shape: (Batch_Size, n_modes)
+        Vert_MACs = calculate_MAC(true_vertmodes, pred_vertmodes) #shape: (Batch_size, n_modes)
+        # MACs = K.ops.hstack((Rot_MACs, Vert_MACs))
         MACs = tf.concat([Rot_MACs, Vert_MACs], axis=1)
         neg_MACs = 1 - MACs
         Loss_MAC = tf.math.reduce_mean(neg_MACs, axis  = None)
@@ -234,11 +259,10 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         return Loss_MAC 
     
     def Alpha_regularizer(self, y_true, y_pred):
-        # Operates on Physical Alphas (y_pred), so no change needed
         min_value = tf.reduce_min(y_pred, axis=-1, keepdims=False)
-        Regularizer = tf.math.reduce_mean(tf.math.reduce_sum(y_pred,axis = -1)-min_value)/(y_pred.shape[-1])-1
+        Regularizer = tf.math.reduce_mean( tf.math.reduce_sum(y_pred,axis = -1)-min_value)/(y_pred.shape[-1])-1
         return self.epsi*Regularizer
-    
+     
     
     def Copula_pdf_logprob(self,y_true, ypred):
         """
@@ -264,276 +288,40 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         
     
         return log_prob_joint_normal - log_prob_marginals_standard
-    
-    
-    
-    def Marginal_pdf_logprob(self,y_true, y_pred):
-        '''
-        #This one is used for Gaussian marginal directly (known inverse CDF)
-        Here we calculate the log probability of the samples over the marginal distributions 
-        We have n_dims marginals to consider. 
-        The inputs are taken from the self, and include the marginal_samples, and the marginals parameters 
-        The output will be the log_probs with shape [batch_size, num_samples]
-        '''
-        # Taking into account that here we have only one gaussian, we can neglect the dimension of num_gaussians as it is simply 1. 
-        gaussian_marginals = tfd.TruncatedNormal(loc=self.reshaped_means[:,0,:], scale=self.reshaped_scales[:,0,:], low=-0.0001, high=1.0001)
-        # This is producing one logprob value for each dimension 
-        log_prob_marginals = tf.math.log(gaussian_marginals.prob(self.reshaped_alpha_samples)+ 1e-06)  
-        # According to the equation (see paper), log(SUM) = SUM(logs): 
-        log_prob_marginal = tf.math.reduce_sum(log_prob_marginals,axis = -1)    # to sum in the axis of n_dims        
-        return log_prob_marginal
-    
-    
-    def Joint_copula_dens_term(self,y_true, y_pred):
-        Copula_density_term = self.Copula_pdf_logprob(y_true, y_pred)
-        Marginal_logprob_term = self.Marginal_pdf_logprob(y_true,y_pred)   
-        
-        joint_copula_logprob = tf.math.reduce_mean(Copula_density_term + Marginal_logprob_term, axis = None)
-        joint_copula_logprob = tf.math.square(tf.cast(self.beta, dtype=tf.float32))* (joint_copula_logprob)
 
-        return joint_copula_logprob
-    
-    def ELBO_Copula_loss(self, y_true, y_pred):
-        # Joint_copula_loss is now NLL (positive value to minimize)
-        Joint_copula_loss  = self.Joint_copula_dens_term(y_true, y_pred)
-        Loss_freqs = self.Freqs_loss(y_true,y_pred)
-        Loss_MAC = self.MAC_modes_loss(y_true,y_pred)
-        Regularizer = self.Alpha_regularizer(y_true, y_pred)
-                
-        ELBO_loss = Loss_MAC + Loss_freqs - Regularizer + Joint_copula_loss
-        return ELBO_loss
-    
-    
+    def Marginal_pdf_logprob(self, y_true, y_pred):
+        """
+        Calculates log P(alpha_samples) using the Change of Variables formula.
+        log P(alpha) = log P(z) - log |det J|
 
-    
-    
-    # --------------------------------------------------------------------------
-    # WARPED GAUSSIAN PROBABILITY TERMS
-    # --------------------------------------------------------------------------
-    
-    # def Marginal_pdf_logprob(self, y_true, y_pred):
-    #     """
-    #     Calculates log P(alpha_samples) using the Change of Variables formula.
-    #     log P(alpha) = log P(z) - log |det J|
-    #     Evaluates the probability of the SAMPLED points (z).
-    #     """
-    #     # 1. Use the Latent Z Samples generated in call()
-    #     # These are unbounded samples (-inf, inf)
-    #     z_samples = self.reshaped_marginal_samples_z
+        Note: This evaluates the probability of the SAMPLED points, not y_true.
+        """
+        
+        # 1. Use the Latent Z Samples generated in call()
+        # These are unbounded samples (-inf, inf)
+        z_samples = self.reshaped_marginal_samples
 
-    #     # 2. Calculate log P(z) using Gaussian Mixture Marginals
-    #     # Since 'z' space is unbounded, we use standard Normal distributions
-    #     gm = tfd.MixtureSameFamily(
-    #         mixture_distribution=tfd.Categorical(probs=self.reshaped_weight_vals),
-    #         components_distribution=tfd.Normal(loc=self.reshaped_means, scale=self.reshaped_scales)
-    #     )
+        # 2. Calculate log P(z) using Gaussian Mixture Marginals
+        # Since 'z' space is unbounded, we use standard Normal distributions (not Truncated).
+        gm = tfd.MixtureSameFamily(
+            mixture_distribution=tfd.Categorical(probs=self.reshaped_weight_vals),
+            components_distribution=tfd.Normal(loc=self.reshaped_means, scale=self.reshaped_scales)
+        )
         
-    #     # Log Probability of z samples under the predicted Gaussian parameters
-    #     log_prob_z = tf.math.log(gm.prob(z_samples) + 1e-9)
+        # Log Probability of z samples under the predicted Gaussian parameters
+        # This tells us how likely the samples z are under the distribution N(mu, sigma)
+        log_prob_z = tf.math.log(gm.prob(z_samples) + 1e-9)
         
-    #     # 3. Calculate Jacobian Correction: log |d_alpha / d_z|
-    #     log_det_jac = self.bijector.log_det_jacobian(z_samples)
+        # 3. Calculate Jacobian Correction: log |d_alpha / d_z|
+        # We need this to convert the density from Z-space to Alpha-space
+        log_det_jac = self.bijector.log_det_jacobian(z_samples)
         
-    #     # 4. Apply Change of Variables: log P(alpha) = log P(z) - log |det J|
-    #     log_prob_alpha_marginal = log_prob_z - log_det_jac
+        # 4. Apply Change of Variables
+        # log P(alpha) = log P(z) - log |det J|
+        log_prob_alpha_marginal = log_prob_z - log_det_jac
         
-    #     # Sum over dimensions to get total log prob per sample vector
-    #     return tf.reduce_sum(log_prob_alpha_marginal, axis=-1)
-
-    # def Copula_pdf_logprob(self, y_true, y_pred):
-    #     """
-    #     Calculates the Copula density term for the SAMPLES (z).
-    #     """
-    #     # 1. Use the Latent Z Samples
-    #     z_samples = self.reshaped_marginal_samples_z
-
-    #     # 2. Standardize Z to get inputs for the Copula
-    #     # z_std = (z - mu) / sigma
-    #     # Assuming Unimodal Gaussian for standardization (simplification for GMM)
-    #     z_std = (z_samples - self.reshaped_means[:,0,:]) / (self.reshaped_scales[:,0,:] + 1e-9)
-        
-    #     # 3. Calculate Copula Log Prob
-    #     mvn = tfd.MultivariateNormalTriL(loc = tf.zeros(self.n_dims), scale_tril = self.reshaped_LT_matrices)
-        
-    #     log_prob_joint_normal = tf.math.log(mvn.prob(z_std) + 1e-7)
-    #     log_prob_marginals_standard = tf.reduce_sum(tf.math.log(tfd.Normal(0.0, 1.0).prob(z_std) + 1e-7), axis=-1)
-        
-    #     return log_prob_joint_normal - log_prob_marginals_standard
-    
-    # def Joint_copula_dens_term(self, y_true, y_pred):
-    #     Copula_density_term = self.Copula_pdf_logprob(y_true, y_pred)
-    #     Marginal_logprob_term = self.Marginal_pdf_logprob(y_true, y_pred)
-        
-    #     # Total Log Likelihood of the SAMPLES
-    #     total_log_prob = Copula_density_term + Marginal_logprob_term
-        
-    #     # We perform Negation here because the optimizer MINIMIZES loss.
-    #     # We want to MAXIMIZE likelihood.
-    #     # Therefore, we return Negative Log Likelihood.
-    #     joint_copula_logprob = tf.math.reduce_mean(total_log_prob, axis = None)
-        
-    #     # Beta weighting
-    #     weighted_nll = -1.0 * tf.math.square(tf.cast(self.beta, dtype=tf.float32)) * joint_copula_logprob
-    #     return weighted_nll
-    
-    # def ELBO_Copula_loss(self, y_true, y_pred):
-    #     # Joint_copula_loss is now NLL (positive value to minimize)
-    #     Joint_copula_loss  = self.Joint_copula_dens_term(y_true, y_pred)
-    #     Loss_freqs = self.Freqs_loss(y_true,y_pred)
-    #     Loss_MAC = self.MAC_modes_loss(y_true,y_pred)
-    #     Regularizer = self.Alpha_regularizer(y_true, y_pred)
-                
-    #     ELBO_loss = Loss_MAC + Loss_freqs - Regularizer + Joint_copula_loss
-    #     return ELBO_loss
-    
-    def get_config(self):
-        config = {
-            'num_dofs': self.num_dofs,
-            'M_free': self.Mfree,
-        }
-        base_config = super(My_CopulaVAE_withEigen, self).get_config()
-        return dict(list(base_config.items()) + list(config.items()))
-
-    @classmethod
-    def from_config(cls, config):
-        return cls(**config)
-    
-    
-    #     ## CREATE SAMPLES FROM THE DISTRIBUTIONAL LEARNING MODEL USING COPULA SAMPLING LAYER
-    #     # inputs_to_sampling = [self.means, self.scales, self.weight_vals, self.offdiag_elems, self.diag_elems]
-    #     inputs_to_sampling = {
-    #     'means': self.means,
-    #     'scales': self.scales,
-    #     'weight_vals': self.weight_vals,
-    #     'offdiag_elems': self.offdiag_elems,
-    #     'diag_elems': self.diag_elems
-    # }
-        
-    #     self.marginal_samples, self.copula_samples, self.LT_matrices = self.Copula_sampling_layer(inputs_to_sampling)
-    #     self.reshaped_marginal_samples = tf.reshape(self.marginal_samples, (-1, self.n_dims)) #to take Shape (Batch_size, n_dims)
-    #     self.reshaped_copula_samples  = tf.reshape(self.copula_samples, (-1, self.n_dims))
-
-    #     self.LT_matrices_ext =  tf.repeat(self.LT_matrices[:,tf.newaxis,:,:], self.num_samples, axis = 1)
-    #     self.reshaped_LT_matrices = tf.reshape(self.LT_matrices_ext, [-1,self.n_dims, self.n_dims])
-        
-        
-    #     reshaped_alpha_factors = self.reshaped_marginal_samples #HEre the latent space represents the alpha factors or reduction factors affecting the stiffness matrix
-    #     # # Apply the corresponding factor using einsum(Batch_size, n_elements, 4x4)
-    #     Ke_matrices_dam = tf.einsum('BE, EKQ -> BEKQ', tf.cast(reshaped_alpha_factors, dtype = tf.float32), tf.cast(self.Ke_matrices, dtype = tf.float32))
-    #     # Bear in mind that B here is B*H but we keep the same notation for that first dimension. 
-    #     # So now Ke_matrices_dam must have shape (B*H, Elements, K,Q)
-    #     # KQ indicate the dimension of the element matrix that here is 2x2 since we are in lienar elasticity 
-        
-    #     # # Assemble the element matrices to build the global matrix        
-    #     Kfree = assemble_global_Kmatrices(Ke_matrices_dam, self.n_elements,  self.num_samples) # the shape is (Batch_size, n_free, n_free)
-
-    #     # Then we enter the eigensolver (forward) function with this list to produce the eigenfrequencies
-    #     self.pred_freqs, self.pred_rotmodes, self.pred_vertmodes = self.Eigen_solver(Kfree)
-    #     self.pred_freqs = tf.abs(self.pred_freqs) #to enforce them to be positive***
-    #     #The output of this function is the output of the inverse, i.e., the estimated damage condition described by the alpha factors.
-    #     #They have shape (B*H, D) 
-    #     return  reshaped_alpha_factors
-        
-    # def Freqs_loss(self, y_true, y_pred):
-    #     true_freqs = self.freq_data
-    #     true_freqs = tf.repeat(true_freqs[:,:,tf.newaxis], self.num_samples, axis = 2)
-    #     #Reshape to accommodate for further steps (final shape: (batch_size*N, n_features)) that will be seen as (None, n_features)
-    #     true_freqs = tf.reshape(tf.transpose(true_freqs, perm = [0,2,1]), [-1,y_true.shape[1]])
-        
-    #     pred_freqs = self.pred_freqs
-
-
-    #     Freqs_sq_error = tf.square(tf.math.log(true_freqs) - tf.math.log(pred_freqs))
-    #     Loss_freqs = tf.math.reduce_mean(Freqs_sq_error, axis = None)
-    #     return Loss_freqs
-    
-
-    # def MAC_modes_loss(self, y_true, y_pred):
-    #     True_rotmodes, True_vertmodes  = self.rot_modes_data, self.vert_modes_data
-        
-    #     true_rotmodes = tf.repeat(True_rotmodes[:,:,:,tf.newaxis], self.num_samples, axis = 3)
-    #     true_rotmodes = tf.reshape(tf.transpose(true_rotmodes, perm = [0,3,1,2]), [-1,True_rotmodes.shape[1], True_rotmodes.shape[2]])
-        
-    #     true_vertmodes = tf.repeat(True_vertmodes[:,:,:, tf.newaxis], self.num_samples, axis = 3)
-    #     true_vertmodes = tf.reshape(tf.transpose(true_vertmodes, perm = [0,3,1,2]), [-1,True_vertmodes.shape[1], True_vertmodes.shape[2]])
-        
-        
-        
-    #     pred_rotmodes, pred_vertmodes = self.pred_rotmodes, self.pred_vertmodes
-    #     #Calculate the MACs
-    #     Rot_MACs = calculate_MAC(true_rotmodes, pred_rotmodes) #shape: (Batch_Size, n_modes)
-    #     Vert_MACs = calculate_MAC(true_vertmodes, pred_vertmodes) #shape: (Batch_size, n_modes)
-    #     # MACs = K.ops.hstack((Rot_MACs, Vert_MACs))
-    #     MACs = tf.concat([Rot_MACs, Vert_MACs], axis=1)
-    #     neg_MACs = 1 - MACs
-    #     Loss_MAC = tf.math.reduce_mean(neg_MACs, axis  = None)
-        
-    #     return Loss_MAC 
-    
-    # def Alpha_regularizer(self, y_true, y_pred):
-    #     min_value = tf.reduce_min(y_pred, axis=-1, keepdims=False)
-    #     Regularizer = tf.math.reduce_mean( tf.math.reduce_sum(y_pred,axis = -1)-min_value)/(y_pred.shape[-1])-1
-    #     return self.epsi*Regularizer
-     
-    
-    # def Copula_pdf_logprob(self,y_true, ypred):
-    #     """
-    #     Compute the log-likelihood of the joint PDF defined by a Gaussian copula and Gaussian mixture marginals.
-        
-    #     Args:
-    #         locs: Tensor of shape [n_modes, n_dims], means of the Gaussian mixture components.
-    #         scales: Tensor of shape [n_modes, n_dims], standard deviations of the Gaussian mixture components.
-    #         weights: Tensor of shape [n_modes, n_dims], weights of the Gaussian mixture components.
-    #         correlation_matrix: Tensor of shape [n_dims, n_dims], correlation matrix of the Gaussian copula.
-    #         samples: Tensor of shape [n_samples, n_dims], the observed data.
-    
-    #     Returns:
-    #         log_likelihood: Tensor of shape [], the log-likelihood of the joint PDF.
-    #     """
-                
-    #     # Convert uniform samples to standard normal
-    #     normal_samples = tfd.Normal(loc=0.0, scale=1.0).quantile(self.reshaped_copula_samples)
-    #     mvn = tfd.MultivariateNormalTriL(loc = tf.zeros(self.n_dims), scale_tril = self.reshaped_LT_matrices)
-
-    #     log_prob_joint_normal = tf.math.log(mvn.prob(normal_samples)+1e-07)
-    #     log_prob_marginals_standard = tf.reduce_sum(tf.math.log(tfd.Normal(0.0, 1.0).prob(normal_samples)+1e-07), axis=-1)      
-        
-    
-    #     return log_prob_joint_normal - log_prob_marginals_standard
-
-    # def Marginal_pdf_logprob(self, y_true, y_pred):
-    #     """
-    #     Calculates log P(alpha_samples) using the Change of Variables formula.
-    #     log P(alpha) = log P(z) - log |det J|
-
-    #     Note: This evaluates the probability of the SAMPLED points, not y_true.
-    #     """
-        
-    #     # 1. Use the Latent Z Samples generated in call()
-    #     # These are unbounded samples (-inf, inf)
-    #     z_samples = self.reshaped_marginal_samples
-
-    #     # 2. Calculate log P(z) using Gaussian Mixture Marginals
-    #     # Since 'z' space is unbounded, we use standard Normal distributions (not Truncated).
-    #     gm = tfd.MixtureSameFamily(
-    #         mixture_distribution=tfd.Categorical(probs=self.reshaped_weight_vals),
-    #         components_distribution=tfd.Normal(loc=self.reshaped_means, scale=self.reshaped_scales)
-    #     )
-        
-    #     # Log Probability of z samples under the predicted Gaussian parameters
-    #     # This tells us how likely the samples z are under the distribution N(mu, sigma)
-    #     log_prob_z = tf.math.log(gm.prob(z_samples) + 1e-9)
-        
-    #     # 3. Calculate Jacobian Correction: log |d_alpha / d_z|
-    #     # We need this to convert the density from Z-space to Alpha-space
-    #     log_det_jac = self.bijector.log_det_jacobian(z_samples)
-        
-    #     # 4. Apply Change of Variables
-    #     # log P(alpha) = log P(z) - log |det J|
-    #     log_prob_alpha_marginal = log_prob_z - log_det_jac
-        
-    #     # Sum over dimensions to get total log prob per sample vector
-    #     return tf.reduce_sum(log_prob_alpha_marginal, axis=-1)
+        # Sum over dimensions to get total log prob per sample vector
+        return tf.reduce_sum(log_prob_alpha_marginal, axis=-1)
     
     
     # def Marginal_pdf_logprob(self,y_true, y_pred):
@@ -555,68 +343,50 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
 
     
     
-    # def Joint_copula_dens_term(self,y_true, y_pred):
-    #     Copula_density_term = self.Copula_pdf_logprob(y_true, y_pred)
-    #     Marginal_logprob_term = self.Marginal_pdf_logprob(y_true,y_pred)   
+    def Joint_copula_dens_term(self,y_true, y_pred):
+        Copula_density_term = self.Copula_pdf_logprob(y_true, y_pred)
+        Marginal_logprob_term = self.Marginal_pdf_logprob(y_true,y_pred)   
         
-    #     joint_copula_logprob = tf.math.reduce_mean(Copula_density_term + Marginal_logprob_term, axis = None)
-    #     joint_copula_logprob = tf.math.square(tf.cast(self.beta, dtype=tf.float32))* (joint_copula_logprob)
-    #     return joint_copula_logprob
+        joint_copula_logprob = tf.math.reduce_mean(Copula_density_term + Marginal_logprob_term, axis = None)
+        joint_copula_logprob = tf.math.square(tf.cast(self.beta, dtype=tf.float32))* (joint_copula_logprob)
+        return joint_copula_logprob
     
     
     
-    # def ELBO_Copula_loss(self, y_true, y_pred):
-    #     Joint_copula_logprob  = self.Joint_copula_dens_term(y_true, y_pred)
-    #     Loss_freqs = self.Freqs_loss(y_true,y_pred)
-    #     Loss_MAC = self.MAC_modes_loss(y_true,y_pred)
-    #     Regularizer = self.Alpha_regularizer(y_true, y_pred)
+    def ELBO_Copula_loss(self, y_true, y_pred):
+        Joint_copula_logprob  = self.Joint_copula_dens_term(y_true, y_pred)
+        Loss_freqs = self.Freqs_loss(y_true,y_pred)
+        Loss_MAC = self.MAC_modes_loss(y_true,y_pred)
+        Regularizer = self.Alpha_regularizer(y_true, y_pred)
                 
-    #     ELBO_loss = Loss_MAC + Loss_freqs - Regularizer + Joint_copula_logprob
-    #     return ELBO_loss
+        ELBO_loss = Loss_MAC + Loss_freqs - Regularizer + Joint_copula_logprob
+        return ELBO_loss
     
     
     
-    # ## use this custom loss when you want to debug the second part of the code (the eigenvalue problem)
-    # def custom_loss(self,y_true, y_pred):
-    #     loss = tf.math.reduce_mean(tf.square(y_true-y_pred), axis = None)    
-    #     return loss
+    ## use this custom loss when you want to debug the second part of the code (the eigenvalue problem)
+    def custom_loss(self,y_true, y_pred):
+        loss = tf.math.reduce_mean(tf.square(y_true-y_pred), axis = None)    
+        return loss
     
 
-    # def get_config(self):
-    #     config = {
-    #         'num_dofs': self.num_dofs,
-    #         'M_free': self.Mfree,
-    #         # 'eigensolver': self.Eigen_solver
-    #     }
-    #     base_config = super(My_CopulaVAE_withEigen, self).get_config()
-    #     return dict(list(base_config.items()) + list(config.items()))
+    def get_config(self):
+        config = {
+            'num_dofs': self.num_dofs,
+            'M_free': self.Mfree,
+            # 'eigensolver': self.Eigen_solver
+        }
+        base_config = super(My_CopulaVAE_withEigen, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
 
-    # @classmethod
-    # def from_config(cls, config):
+    @classmethod
+    def from_config(cls, config):
         
-    #     # config['Solve_eigenproblem'] = tf.keras.utils.deserialize_keras_object(config['Solve_eigenproblem'])
-    #     return cls(**config)
+        # config['Solve_eigenproblem'] = tf.keras.utils.deserialize_keras_object(config['Solve_eigenproblem'])
+        return cls(**config)
     
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-###############################################3
 # class My_Copula_VAE(tf.keras.Model):
 #     def __init__(self, input_dim_encoder, input_dim_decoder, output_dim, n_dims, num_gaussians, num_samples, model_forward, selected_features, beta):
 #         super(My_Copula_VAE, self).__init__()
