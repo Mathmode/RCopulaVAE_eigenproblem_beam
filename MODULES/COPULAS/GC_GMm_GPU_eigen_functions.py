@@ -149,7 +149,6 @@ def assemble_global_Kmatrices(Ke_matrices_dam, n_elements, num_samples):
 # -------------------------------------------------------------------------
 # 2. ROBUST EIGENSOLVER
 # -------------------------------------------------------------------------
-
 @tf.function(jit_compile=True)
 def safe_eigh(tensor):
     """
@@ -210,7 +209,7 @@ class Solve_eigenproblem(Layer):
         # 2. Jitter for Stability (CRITICAL)
         # Add epsilon to diagonal to ensure positive definiteness during training
         # prevents NaNs in gradients of sqrt() later.
-        jitter = 1e-7 * tf.eye(self.num_dofs, batch_shape=tf.shape(Kfree)[:1])
+        jitter = 1e-6 * tf.eye(self.num_dofs, batch_shape=tf.shape(Kfree)[:1])
         A = A + jitter
         
         # 3. Solve Eigenvalues

@@ -302,13 +302,13 @@ def plot_Datamisift_KDE(point_cloud, pos, chosen_axis, clouds_path):
 # BEST COLOR MAPS: gnuplot2, nipy_spectral, 
 
 ###################### now plot the KDE PDF of the predictions provided by the NN 
-def plot_KDE_pdf(locs, scales, weights, LT_matrix, n_dims, n_samples, pos, chosen_axis,  folder_path):
+def plot_KDE_pdf(locs, scales, weights, LT_matrix, n_dims, n_samples, pos,  folder_path):
     copula_samples, mvn_samples, mvn_model = gaussian_copula(LT_matrix, n_dims, n_samples) 
     marginal_samples = build_marginal_samples(locs, scales, weights, copula_samples)
     # choose the  axis (THIS MUST BE DONE IN A LOOP TO PLOT ALL THE AXIS COMBINATIONS) [(0,1),(0,2),(0,3) (0,4), (1,2), (1,3), (1,4), (2,3), (2,4), (3,4)]
     
-    x = marginal_samples[:, chosen_axis[0]].numpy()
-    y = marginal_samples[:, chosen_axis[1]].numpy()      
+    x = marginal_samples[:, 0].numpy()
+    y = marginal_samples[:,1].numpy()      
     # Perform kernel density estimation
     kde = gaussian_kde([x, y])
     
@@ -356,14 +356,111 @@ def plot_KDE_pdf(locs, scales, weights, LT_matrix, n_dims, n_samples, pos, chose
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.0])
             
-    plt.savefig(os.path.join(folder_path, 'test_KDE_case_'+ str(pos)+'_Axis_'+str(chosen_axis)+'.png'), dpi=300, bbox_inches='tight')
+    # plt.savefig(os.path.join(folder_path, 'test_KDE_case_'+ str(pos)+'_Axis_'+str(chosen_axis)+'.png'), dpi=300, bbox_inches='tight')
     
-    # plt.show()
+    plt.show()
     # plt.close()
       
 
 
+def plot_results_PDF_uncertainty(n_elements, locs, scales, weights, LT_matrix, n_dims, n_samples, pos, alpha_factors_true_test, folder_path):
+    copula_samples, mvn_samples, mvn_model = gaussian_copula(LT_matrix, n_dims, n_samples) 
+    z_pred_samples = build_marginal_samples(locs, scales, weights, copula_samples)
+    z_true = alpha_factors_true_test[pos] if 'alpha_factors_true_test' in locals() else None
+    print(z_true)
+    expected_z = np.mean(z_pred_samples, axis=0)
+    std_z = np.std(z_pred_samples, axis=0)
 
+    # 4.2 Main Predicted Posterior Plot (Pairwise Matrices)
+    fig, axes = plt.subplots(n_elements, n_elements, figsize=(10, 10), facecolor='white')
+    labels = [f'$z_{{{k+1}}}$' for k in range(n_elements)]
+
+    for r in range(n_elements):
+        for c in range(n_elements):
+            ax = axes[r, c]
+            if r == c: # Diagonal: Physical Labels
+                ax.text(0.5, 0.5, labels[r], fontsize=22, ha='center', va='center', fontweight='bold', color='#333333')
+                ax.set_xlim([0, 1]); ax.set_ylim([0, 1])
+                ax.axis('off')
+            elif r > c: # Lower Triangle: Smooth 2D Joint PDF
+                xi, yi = np.mgrid[0:1:100j, 0:1:100j]
+                
+                # Perform KDE on the predicted samples
+                kde_coords = np.vstack([z_pred_samples[:, c], z_pred_samples[:, r]])
+                kde = gaussian_kde(kde_coords)
+                zi = kde(np.vstack([xi.flatten(), yi.flatten()])).reshape(xi.shape)
+                
+                # Plot density
+                ax.contourf(xi, yi, zi, levels=30, cmap='viridis', alpha=0.9)
+                ax.contour(xi, yi, zi, levels=5, colors='white', linewidths=0.3, alpha=0.2)
+                
+                # Mark Ground Truth (Target)
+                if z_true is not None:
+                    ax.plot(z_true[c], z_true[r], 'ro', markersize=7, markeredgecolor='white', markeredgewidth=1, zorder=10)
+                
+                if c == 0: ax.set_ylabel(labels[r], fontsize=12)
+                if r == n_elements - 1: ax.set_xlabel(labels[c], fontsize=12)
+                ax.set_xlim([0, 1]); ax.set_ylim([0, 1])
+                ax.tick_params(labelsize=8)
+                ax.grid(True, linestyle=':', alpha=0.3)
+            else:
+                ax.axis('off')
+
+    plt.subplots_adjust(wspace=0.1, hspace=0.1)
+    save_dir = os.path.join(folder_path, "Prediction_plots")
+    if not os.path.exists(save_dir): os.makedirs(save_dir)
+    plt.savefig(os.path.join(save_dir, f'P{pos}_Predicted_JointPosterior.png'), dpi=500, bbox_inches='tight')
+    plt.show()
+    
+    # 4.3 Physical Predicted Damage Profile
+    fig, (ax_bar, ax_beam) = plt.subplots(2, 1, figsize=(10, 6.5), gridspec_kw={'height_ratios': [4, 1]}, sharex=True)
+    
+    elements = np.arange(1, n_elements + 1)
+    color_estimate = '#4575b4' # Sophisticated Blue
+    color_true = '#d73027'     # Strong Red
+    
+    # Top Plot: Bar chart with Predicted Uncertainty
+    ax_bar.bar(elements, expected_z, yerr=std_z, color=color_estimate, alpha=0.65, 
+               label='Predicted Mean Stiffness Reduction ($E[z|\mathbf{m}]$)', 
+               capsize=8, error_kw={'elinewidth':2, 'capthick':2, 'ecolor': '#1a1a1a'})
+    
+    if z_true is not None:
+        x_step = np.arange(0.5, n_elements + 1.5, 1)
+        y_step = np.concatenate([z_true, [z_true[-1]]])
+        ax_bar.step(x_step, y_step, where='post', color=color_true, 
+                    label='True Damage State ($\mathbf{z}^*$)', linestyle='--', lw=2.5, zorder=5)
+    
+    ax_bar.set_ylabel('Stiffness Reduction ($z$)', fontsize=13, fontweight='medium')
+    ax_bar.set_ylim([0, 1.2])
+    ax_bar.legend(loc='upper center', bbox_to_anchor=(0.5, 1.18), ncol=2, frameon=False, fontsize=11)
+    ax_bar.grid(axis='y', alpha=0.2, linestyle='-')
+    
+    # Explain Predicted Uncertainty
+    props = dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='silver')
+    ax_bar.text(0.02, 0.95, "Note: Error bars denote predicted 1$\sigma$ \n(Uncertainty from Inverse Model)", 
+                transform=ax_bar.transAxes, fontsize=9, verticalalignment='top', bbox=props)
+    
+    # Physical Beam Heatmap
+    beam_viz = expected_z.reshape(1, -1)
+    im = ax_beam.imshow(beam_viz, cmap='YlGnBu', aspect='auto', extent=[0.5, n_elements + 0.5, 0, 1], vmin=0, vmax=1)
+    
+    ax_beam.set_yticks([])
+    ax_beam.set_xticks(elements)
+    ax_beam.set_xticklabels([f'Element {k}' for k in elements], fontsize=11)
+    ax_beam.tick_params(axis='x', length=0)
+    
+    for j, val in enumerate(expected_z):
+        text_color = 'white' if val > 0.6 else 'black'
+        ax_beam.text(j + 1, 0.5, f'{val:.2f}', ha='center', va='center', 
+                     color=text_color, fontweight='bold', fontsize=11)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, f'P{pos}_Predicted_PhysicalProfile.png'), dpi=500, bbox_inches='tight')
+    plt.show()
+
+   
+    
+    
 
 
 

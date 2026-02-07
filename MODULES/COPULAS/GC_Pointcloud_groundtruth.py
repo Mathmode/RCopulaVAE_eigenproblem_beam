@@ -40,6 +40,9 @@ Freqs_true_train, Rotmodes_true_train, Vertmodes_true_train, alpha_factors_true_
 # load the mass  and stiffness matrix from wherever you have calculated it
 Mfree, Ke_matrices, L_inv = load_known_matrices(data_path, n_elements)
 
+
+input_dim_decoder = n_elements
+
 def calculate_MAC(modes_true, modes_pred):
     modes_true_transp = np.einsum('BCM -> BMC', modes_true)
     modes_pred_transp  = np.einsum('BCM -> BMC', modes_pred)
@@ -51,7 +54,7 @@ def calculate_MAC(modes_true, modes_pred):
     return MAC
 
 
-def select_gt_pointcloud(input_dim_decoder, Freqs_true_test, Rotmodes_true_test, Vertmodes_true_test, alpha_factors_true_test, Mfree, Ke_matrices, L_inv, n_elements, num_gaussians, num_samples, num_dofs, selected_features, positions, folder_path ):
+def select_gt_pointcloud(input_dim_decoder, Freqs_true_test, Rotmodes_true_test, Vertmodes_true_test, alpha_factors_true_test, Mfree, Ke_matrices, L_inv, n_elements, num_dofs, folder_path ):
     point_clouds  = []
     N = 20000 # number of points to form the cloud to be used as Ground Truth (GT)
     num_samples = 1
@@ -135,4 +138,9 @@ def select_gt_pointcloud(input_dim_decoder, Freqs_true_test, Rotmodes_true_test,
     
     point_clouds = np.array(point_clouds)
     # np.savetxt(os.path.join(folder_path,"Point_clouds.csv"), combined_array, delimiter=",", header="Z1,Z2,Data_misfit", comments="", fmt="%g")        
-    np.save(os.path.join(folder_path,"Test_Point_clouds.npy"), point_clouds)        
+    np.save(os.path.join(folder_path,"Prueba_Test_Point_clouds_03Feb.npy"), point_clouds)        
+
+Test_point_clouds = select_gt_pointcloud(input_dim_decoder, Freqs_true_test, Rotmodes_true_test, Vertmodes_true_test, alpha_factors_true_test, Mfree, Ke_matrices, L_inv, n_elements, num_dofs, folder_path )
+
+
+

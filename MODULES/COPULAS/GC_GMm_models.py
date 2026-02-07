@@ -17,38 +17,6 @@ from MODULES.COPULAS.GC_GMm_architectures import Fully_connected_enc_GC, Copula_
 # from MODULES.COPULAS.GC_GMm_eigen_functions import Solve_eigenproblem, SolveEigenproblemStable, assemble_global_Kmatrices
 from MODULES.COPULAS.GC_GMm_GPU_eigen_functions import Solve_eigenproblem, SolveEigenproblemStable, assemble_global_Kmatrices
 
-class IntervalBijector:
-    """
-    Handles the transformation between the bounded physical space [low, high]
-    and the unbounded latent space (-inf, inf).
-    """
-    def __init__(self, low=0.05, high=1.0):
-        self.low = tf.constant(low, dtype=tf.float32)
-        self.high = tf.constant(high, dtype=tf.float32)
-        self.range = self.high - self.low
-
-    def forward_transform(self, z):
-        """Unbounded z -> Bounded alpha"""
-        # alpha = low + (high-low) * sigmoid(z)
-        return self.low + self.range * tf.math.sigmoid(z)
-
-    def inverse_transform(self, x):
-        """Bounded alpha -> Unbounded z"""
-        # z = logit( (alpha - low) / (high - low) )
-        # Clipping for numerical stability to avoid log(0) inside logit
-        x_norm = (x - self.low) / self.range
-        x_norm = tf.clip_by_value(x_norm, 1e-6, 1.0 - 1e-6) 
-        return tf.math.log(x_norm / (1.0 - x_norm))
-
-    def log_det_jacobian(self, z):
-        """
-        Calculates log | d_alpha / d_z |
-        Used to correct the likelihood loss when transforming densities.
-        """
-        s = tf.math.sigmoid(z)
-        # derivative = range * s * (1-s)
-        # log_det = log(range) + log(s) + log(1-s)
-        return tf.math.log(self.range) + tf.math.log(s) + tf.math.log(1.0 - s)
 
 @tf.function(jit_compile = True)
 def calculate_MAC(modes_true, modes_pred):
@@ -86,8 +54,6 @@ class ForwardModel(K.Model):
         }
         base_config = super(ForwardModel, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
-
-
 
 
 class Inverse_Copula_Model(tf.keras.Model):
@@ -152,7 +118,7 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         # Helper for Logit-Normal Transformation
         # We assign it to self.bijector. 
         # Note: If loading weights or restoring model, ensure this init is called.
-        self.bijector = IntervalBijector(low=0.05, high=1.0)
+        # self.bijector = IntervalBijector(low=0.05, high=1.0)
         self.epsi = epsi #wight factor for the regularization term in the loss 
         self.num_gaussians = num_gaussians
         self.n_dims = n_dims
@@ -165,11 +131,6 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         # vert_modes_data size: (Batch_size, free displ. coordinates, n_modes)
         # rot_modes_data size: (Batch_size, free rot. coordinates, n_modes)
         [self.freq_data, self.rot_modes_data, self.vert_modes_data, self.alpha_factors] = inputs
-        # #We now flatten the modeshapes to feed the Inverse DNN with a vector that contains all the frequencies and mode shapes.         
-        # self.flat_rot_modes = tf.reshape(self.rot_modes_data, [-1, self.rot_modes_data.shape[1]* self.rot_modes_data.shape[2]])
-        # self.flat_vert_modes = tf.reshape(self.vert_modes_data, [-1, self.vert_modes_data.shape[1]* self.vert_modes_data.shape[2]])
-        # self.modal_data = K.layers.Concatenate(axis=1)([self.freq_data, self.flat_vert_modes, self.flat_rot_modes])
-        
         self.means, self.scales, self.weight_vals, self.offdiag_elems, self.diag_elems = self.Encoder_model(inputs)
         self.means_ext = tf.repeat(self.means[:,tf.newaxis,:,:], self.num_samples, axis = 1)
         self.reshaped_means = tf.reshape(self.means_ext, [-1,self.num_gaussians, self.n_dims]) # current shape: (batch_size*num_samples, num_gaussians, n_dims)
@@ -189,10 +150,6 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         self.LT_matrices_ext =  tf.repeat(self.LT_matrices[:,tf.newaxis,:,:], self.num_samples, axis = 1)
         self.reshaped_LT_matrices = tf.reshape(self.LT_matrices_ext, [-1,self.n_dims, self.n_dims])
         
-        # 3. TRANSFORM: Map unbounded 'z' to physical 'alpha' [0.05, 1.0]
-        # This is the "Warping" step
-        # self.reshaped_alpha_samples = self.bijector.forward_transform(self.reshaped_marginal_samples_z)
-    
         # 4. DECODER: Solve Physics using Physical Alphas
         # Use vectorized assembly (GPU Optimized)
         Ke_matrices_dam = tf.einsum('BE, EKQ -> BEKQ', tf.cast(self.reshaped_alpha_samples, dtype = tf.float32), tf.cast(self.Ke_matrices, dtype = tf.float32))
@@ -205,33 +162,203 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         return self.reshaped_alpha_samples
     
     def Freqs_loss(self, y_true, y_pred):
-        true_freqs = self.freq_data
-        true_freqs = tf.repeat(true_freqs[:,:,tf.newaxis], self.num_samples, axis = 2)
-        true_freqs = tf.reshape(tf.transpose(true_freqs, perm = [0,2,1]), [-1,y_true.shape[1]])
-        pred_freqs = self.pred_freqs
-        Freqs_sq_error = tf.square(tf.math.log(true_freqs) - tf.math.log(pred_freqs))
-        Loss_freqs = tf.math.reduce_mean(Freqs_sq_error, axis = None)
+        """
+        Robust Sorted Frequency Loss.
+        Ignores Shape Matching logic (which causes the '80.0' error) and 
+        strictly forces the predicted frequency spectrum to match the target spectrum.
+        """
+        # 1. Flatten True Frequencies into a single list per batch
+        # We assume self.freq_data is (Batch, 10) or similar. 
+        # If it is split (Rot/Vert), concat them first.
+        # (Assuming self.freq_data contains all frequencies)
+        true_freqs = self.freq_data 
+        
+        # 2. Sort True Frequencies (Small -> Large)
+        # This ensures we compare the 1st mode to the 1st mode, etc.
+        true_freqs_sorted = tf.sort(true_freqs, axis=1)
+        
+        # 3. Get Pred Frequencies
+        # Eigh outputs are ALWAYS sorted, so we don't strictly need to sort again,
+        # but it's safe to do so.
+        pred_freqs_sorted = self.pred_freqs
+        
+        # 4. Compute Loss (Log Squared Error)
+        # We use a tiny clamp (1e-4) just to prevent NaN if the model predicts 0.0
+        safe_true = tf.maximum(true_freqs_sorted, 1e-4)
+        safe_pred = tf.maximum(pred_freqs_sorted, 1e-4)
+        
+        Freqs_sq_error = tf.square(tf.math.log(safe_true) - tf.math.log(safe_pred))
+        
+        Loss_freqs = tf.math.reduce_mean(Freqs_sq_error)
+        
         return Loss_freqs
     
+    # def Freqs_loss(self, y_true, y_pred):
+    #     """
+    #     Robust Frequency Loss.
+    #     SIMPLIFIED: Assumes self.rot_modes_data is already (Batch, N, D).
+    #     """
+    #     # ==============================================================================
+    #     # 1. POOL TRUE MODES
+    #     # ==============================================================================
+    #     # We assume self.rot_modes_data is already shape (Batch, 6, 5)
+    #     # We assume self.vert_modes_data is already shape (Batch, 4, 5)
+        
+    #     # Simply concatenate them. No repeating needed.
+    #     true_pool_modes = tf.concat([self.rot_modes_data, self.vert_modes_data], axis=1)
+
+    #     # ==============================================================================
+    #     # 2. POOL TRUE FREQUENCIES (Align to Mode Order)
+    #     # ==============================================================================
+    #     # We assume self.freq_data is shape (Batch, 10)
+        
+    #     # Prepare Indices to reorder sorted freqs -> [Rot_List, Vert_List]
+    #     n_total = 10 
+    #     all_idx = tf.range(n_total)
+        
+    #     # Logic: Rot are [0, 2, 4, 6, 8, 9], Vert are [1, 3, 5, 7]
+    #     idx_main = all_idx[:-1]
+    #     rot_idx = tf.concat([idx_main[0::2], all_idx[-1:]], axis=0) 
+    #     vert_idx = idx_main[1::2] 
+    #     perm_indices = tf.concat([rot_idx, vert_idx], axis=0)
+
+    #     # Gather True Frequencies in the correct order
+    #     # We perform this on axis=1 (the features dim), respecting the batch dim automatically
+    #     true_pool_freqs = tf.gather(self.freq_data, perm_indices, axis=1)
+
+    #     # ==============================================================================
+    #     # 3. POOL PREDICTED MODES & FREQUENCIES
+    #     # ==============================================================================
+    #     pred_pool_modes = tf.concat([self.pred_rotmodes, self.pred_vertmodes], axis=1)
+    #     pred_pool_freqs = tf.gather(self.pred_freqs, perm_indices, axis=1)
+
+    #     # ==============================================================================
+    #     # 4. MATCHING (Permutation Invariant)
+    #     # ==============================================================================
+    #     # Normalize
+    #     eps = 1e-6
+    #     true_norm = tf.math.l2_normalize(true_pool_modes + eps, axis=2)
+    #     pred_norm = tf.math.l2_normalize(pred_pool_modes + eps, axis=2)
+
+    #     # Gram Matrix: (Batch, 10, 10)
+    #     # This will now work because both inputs are (Batch, 10, 5)
+    #     gram_matrix = tf.matmul(true_norm, pred_norm, transpose_b=True)
+    #     mac_matrix = tf.square(gram_matrix)
+
+    #     # Find Best Match Indices
+    #     best_match_indices = tf.argmax(mac_matrix, axis=2)
+
+    #     # ==============================================================================
+    #     # 5. COMPUTE LOSS
+    #     # ==============================================================================
+    #     # Gather the predicted frequencies that match our true mode shapes
+    #     matched_pred_freqs = tf.gather(pred_pool_freqs, best_match_indices, batch_dims=1)
+
+    #     # Log-Safe Loss
+    #     safe_true = tf.maximum(true_pool_freqs, 1e-4)
+    #     safe_pred = tf.maximum(matched_pred_freqs, 1e-4)
+
+    #     Freqs_sq_error = tf.square(tf.math.log(safe_true) - tf.math.log(safe_pred))
+        
+    #     return tf.math.reduce_mean(Freqs_sq_error)
+    
+    
+    # def Freqs_loss(self, y_true, y_pred):
+    #     true_freqs = self.freq_data
+    #     true_freqs = tf.repeat(true_freqs[:,:,tf.newaxis], self.num_samples, axis = 2)
+    #     true_freqs = tf.reshape(tf.transpose(true_freqs, perm = [0,2,1]), [-1,y_true.shape[1]])
+    #     pred_freqs = self.pred_freqs
+    #     Freqs_sq_error = tf.square(tf.math.log(true_freqs) - tf.math.log(pred_freqs))
+    #     Loss_freqs = tf.math.reduce_mean(Freqs_sq_error, axis = None)
+        # return Loss_freqs
+    
+    # def MAC_modes_loss(self, y_true, y_pred):
+    #     True_rotmodes, True_vertmodes  = self.rot_modes_data, self.vert_modes_data
+        
+    #     true_rotmodes = tf.repeat(True_rotmodes[:,:,:,tf.newaxis], self.num_samples, axis = 3)
+    #     true_rotmodes = tf.reshape(tf.transpose(true_rotmodes, perm = [0,3,1,2]), [-1,True_rotmodes.shape[1], True_rotmodes.shape[2]])
+        
+    #     true_vertmodes = tf.repeat(True_vertmodes[:,:,:, tf.newaxis], self.num_samples, axis = 3)
+    #     true_vertmodes = tf.reshape(tf.transpose(true_vertmodes, perm = [0,3,1,2]), [-1,True_vertmodes.shape[1], True_vertmodes.shape[2]])
+        
+    #     pred_rotmodes, pred_vertmodes = self.pred_rotmodes, self.pred_vertmodes
+        
+    #     Rot_MACs = calculate_MAC(true_rotmodes, pred_rotmodes) 
+    #     Vert_MACs = calculate_MAC(true_vertmodes, pred_vertmodes) 
+    #     MACs = tf.concat([Rot_MACs, Vert_MACs], axis=1)
+    #     neg_MACs = tf.square(1 - MACs) ## I use tfsquare because in ELBO eq it should be the discrepancy times the discrepancy. 
+    #     Loss_MAC = tf.math.reduce_mean(neg_MACs, axis  = None)
+        
+    #     return Loss_MAC 
+    
+
+    def compute_best_match_loss(self, true_modes, pred_modes):
+        """
+        Helper: Calculates the 'Best Match' MAC loss.
+        Instead of comparing index-to-index (0vs0, 1vs1), this finds the 
+        best matching predicted mode for every true mode.
+        
+        Args:
+            true_modes: (Batch, N_true, D)
+            pred_modes: (Batch, N_pred, D)
+        """
+        # 1. Normalize vectors (L2 norm) to prepare for Cosine Similarity
+        # axis=2 is the DOF dimension
+        true_norm = tf.math.l2_normalize(true_modes, axis=2)
+        pred_norm = tf.math.l2_normalize(pred_modes, axis=2)
+
+        # 2. Compute the Gram Matrix (Cosine Similarity between ALL pairs)
+        # Result shape: (Batch, N_true, N_pred)
+        # Entry [b, i, j] is the similarity between True_Mode[i] and Pred_Mode[j]
+        gram_matrix = tf.matmul(true_norm, pred_norm, transpose_b=True)
+        
+        # 3. Square it to get MAC values (Correlation^2)
+        # This fixes the "Sign Flip" issue automatically (-1 becomes 1)
+        mac_matrix = tf.square(gram_matrix)
+
+        # 4. Find the Best Match
+        # For every TRUE mode (row), what is the max correlation in the PREDICTED cols?
+        best_matches = tf.reduce_max(mac_matrix, axis=2) # Shape: (Batch, N_true)
+        
+        # 5. Compute Loss
+        # We want best_matches to be close to 1.0. 
+        # Loss = Mean( (1 - Best_MAC)^2 )
+        loss = tf.reduce_mean(tf.square(1.0 - best_matches))
+        
+        return loss
 
     def MAC_modes_loss(self, y_true, y_pred):
-        True_rotmodes, True_vertmodes  = self.rot_modes_data, self.vert_modes_data
+        """
+        Computes a loss that allows modes to change order (swap slots)
+        without penalizing the model.
+        """
+        # --- 1. Data Preparation (Same as your original) ---
+        True_rotmodes, True_vertmodes = self.rot_modes_data, self.vert_modes_data
         
-        true_rotmodes = tf.repeat(True_rotmodes[:,:,:,tf.newaxis], self.num_samples, axis = 3)
-        true_rotmodes = tf.reshape(tf.transpose(true_rotmodes, perm = [0,3,1,2]), [-1,True_rotmodes.shape[1], True_rotmodes.shape[2]])
+        # Expand and reshape True Rotational Modes
+        true_rotmodes = tf.repeat(True_rotmodes[:,:,:,tf.newaxis], self.num_samples, axis=3)
+        true_rotmodes = tf.reshape(tf.transpose(true_rotmodes, perm=[0,3,1,2]), 
+                                   [-1, True_rotmodes.shape[1], True_rotmodes.shape[2]])
         
-        true_vertmodes = tf.repeat(True_vertmodes[:,:,:, tf.newaxis], self.num_samples, axis = 3)
-        true_vertmodes = tf.reshape(tf.transpose(true_vertmodes, perm = [0,3,1,2]), [-1,True_vertmodes.shape[1], True_vertmodes.shape[2]])
+        # Expand and reshape True Vertical Modes
+        true_vertmodes = tf.repeat(True_vertmodes[:,:,:, tf.newaxis], self.num_samples, axis=3)
+        true_vertmodes = tf.reshape(tf.transpose(true_vertmodes, perm=[0,3,1,2]), 
+                                    [-1, True_vertmodes.shape[1], True_vertmodes.shape[2]])
         
         pred_rotmodes, pred_vertmodes = self.pred_rotmodes, self.pred_vertmodes
         
-        Rot_MACs = calculate_MAC(true_rotmodes, pred_rotmodes) 
-        Vert_MACs = calculate_MAC(true_vertmodes, pred_vertmodes) 
-        MACs = tf.concat([Rot_MACs, Vert_MACs], axis=1)
-        neg_MACs = 1 - MACs
-        Loss_MAC = tf.math.reduce_mean(neg_MACs, axis  = None)
+        # --- 2. Calculate Robust Loss (The Fix) ---
+        # We calculate the loss for Rot and Vert separately using the "Best Match" logic
+        # This function generates a matrix of shape (Batch, N_true, N_pred)
+
+        loss_rot = self.compute_best_match_loss(true_rotmodes, pred_rotmodes)
+        loss_vert = self.compute_best_match_loss(true_vertmodes, pred_vertmodes)
         
-        return Loss_MAC 
+        # Combine them (Average)
+        Loss_MAC = 0.5 * (loss_rot + loss_vert)
+        
+        return Loss_MAC
+    
     
     def Alpha_regularizer(self, y_true, y_pred):
         # Operates on Physical Alphas (y_pred), so no change needed
@@ -278,7 +405,7 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         # Taking into account that here we have only one gaussian, we can neglect the dimension of num_gaussians as it is simply 1. 
         gaussian_marginals = tfd.TruncatedNormal(loc=self.reshaped_means[:,0,:], scale=self.reshaped_scales[:,0,:], low=-0.0001, high=1.0001)
         # This is producing one logprob value for each dimension 
-        log_prob_marginals = tf.math.log(gaussian_marginals.prob(self.reshaped_alpha_samples)+ 1e-06)  
+        log_prob_marginals = tf.math.log(gaussian_marginals.prob(self.reshaped_alpha_samples)+ 1e-07)  
         # According to the equation (see paper), log(SUM) = SUM(logs): 
         log_prob_marginal = tf.math.reduce_sum(log_prob_marginals,axis = -1)    # to sum in the axis of n_dims        
         return log_prob_marginal
@@ -294,14 +421,39 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         return joint_copula_logprob
     
     def ELBO_Copula_loss(self, y_true, y_pred):
-        # Joint_copula_loss is now NLL (positive value to minimize)
-        Joint_copula_loss  = self.Joint_copula_dens_term(y_true, y_pred)
-        Loss_freqs = self.Freqs_loss(y_true,y_pred)
-        Loss_MAC = self.MAC_modes_loss(y_true,y_pred)
+        """
+        Total Loss Function.
+        """
+        # 1. Copula NLL (Minimize)
+        Joint_copula_loss = self.Joint_copula_dens_term(y_true, y_pred)
+        
+        # 2. Frequencies Loss (MSE or similar)
+        Loss_freqs = self.Freqs_loss(y_true, y_pred)
+        
+        # 3. MAC Loss (Permutation Invariant)
+        Loss_MAC = self.MAC_modes_loss(y_true, y_pred)
+        
+        # 4. Regularizer (e.g. KL Divergence)
         Regularizer = self.Alpha_regularizer(y_true, y_pred)
-                
+        
+        # --- 5. Total Sum ---
+        # NOTE: Ensure these magnitudes are balanced. 
+        # MAC is usually [0, 1]. NLL can be large. Freqs in Hz can be large.
+        # You might need weights like: 10.0 * Loss_MAC + 0.1 * Loss_freqs...
+        
         ELBO_loss = Loss_MAC + Loss_freqs - Regularizer + Joint_copula_loss
+        
         return ELBO_loss
+    
+    # def ELBO_Copula_loss(self, y_true, y_pred):
+    #     # Joint_copula_loss is now NLL (positive value to minimize)
+    #     Joint_copula_loss  = self.Joint_copula_dens_term(y_true, y_pred)
+    #     Loss_freqs = self.Freqs_loss(y_true,y_pred)
+    #     Loss_MAC = self.MAC_modes_loss(y_true,y_pred)
+    #     Regularizer = self.Alpha_regularizer(y_true, y_pred)
+                
+    #     ELBO_loss = Loss_MAC + Loss_freqs - Regularizer + Joint_copula_loss
+    #     return ELBO_loss
     
     
 

@@ -11,6 +11,9 @@ import numpy as np
 import os
 import tensorflow_probability as tfp
 from tensorflow_probability import distributions as tfd
+from scipy.stats import gaussian_kde
+
+
 from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde

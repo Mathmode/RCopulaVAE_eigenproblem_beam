@@ -99,9 +99,10 @@ class Solve_eigenproblem(Layer):
         self.num_dofs = num_dofs
         self.n_modes = n_modes # the number of modes we want to retain
         self.Mfree = Mfree # Fixed mass matrix (known) given a tensor*
-        self.L_inv = tf.cast(L_inv,dtype = tf.float32)
-        # si la funcion está escrita con otras librerias (e.j ,jax) tengo que decorarla para poder ejecutar
-        #Puede que ayude a agilizar un poco el entrenamiento 
+        self.L_inv = tf.cast(L_inv,dtype = tf.float32
+                             
+                             )
+        #Intentamos agilizar el entrenamiento: 
         @tf.function(jit_compile = True)
         def jit_eigh(tensor):
             eigenval, eigenvec= tf.linalg.eigh(tensor)
