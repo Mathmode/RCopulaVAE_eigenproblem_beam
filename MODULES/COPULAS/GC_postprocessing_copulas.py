@@ -326,7 +326,7 @@ def plot_KDE_pdf(locs, scales, weights, LT_matrix, n_dims, n_samples, pos,  fold
     # Method A: Percentage of Maximum Density
     peak_density = Z.max()
     # Set percentage (e.g., 0.1 means show densities above 10% of the peak)
-    threshold_percentage = 0.55 # *** ADJUST THIS VALUE (e.g., 0.05, 0.1, 0.2) ***
+    threshold_percentage = 0.75 # *** ADJUST THIS VALUE (e.g., 0.05, 0.1, 0.2) ***
     density_threshold = peak_density * threshold_percentage
     
     print(f"Maximum density: {peak_density:.4f}")
@@ -362,101 +362,222 @@ def plot_KDE_pdf(locs, scales, weights, LT_matrix, n_dims, n_samples, pos,  fold
     # plt.close()
       
 
+from MODULES.COPULAS.GC_GMm_eigen_functions import assemble_global_Kmatrices
+# %% 2. Physics Engine & MAC Calculation
+def calculate_MAC(phi_true, phi_pred):
+    """
+    Computes MAC: (phi_t^T * phi_p)^2 / ((phi_t^T * phi_t) * (phi_p^T * phi_p))
+    phi_true/pred shapes: (Batch, N_dofs, N_modes)
+    """
+    # Numerator: dot product squared
+    inner_prod = np.sum(phi_true * phi_pred, axis=1) # (Batch, N_modes)
+    numerator = np.square(inner_prod)
+    
+    # Denominator: norms squared
+    denom_true = np.sum(np.square(phi_true), axis=1)
+    denom_pred = np.sum(np.square(phi_pred), axis=1)
+    denominator = denom_true * denom_pred + 1e-10
+    
+    return numerator / denominator
 
-def plot_results_PDF_uncertainty(n_elements, locs, scales, weights, LT_matrix, n_dims, n_samples, pos, alpha_factors_true_test, folder_path):
+def physics_engine_step(K_batch, L_inv_tf, n_modes):
+    with tf.device('/CPU:0'):
+        A_batch = tf.matmul(tf.transpose(L_inv_tf), tf.matmul(K_batch, L_inv_tf))
+        vals, vecs = tf.linalg.eigh(A_batch)
+        vals_trunc = tf.clip_by_value(vals[:, :n_modes], 1e-08, 1e+20)
+        
+        f_Hz = tf.math.sqrt(vals_trunc) / (2 * np.pi)
+        phi = tf.matmul(tf.transpose(L_inv_tf), vecs)[:, :, :n_modes]
+        
+        eig_cut = phi[:, 0:-1, :]
+        rot = tf.concat([eig_cut[:, 0::2, :], phi[:, -1:, :]], axis=1)
+        vert = eig_cut[:, 1::2, :]
+        
+        return f_Hz.numpy(), rot.numpy(), vert.numpy()
+    
+def plot_results_PDF_uncertainty(model, beta, n_elements, n_modes, locs, scales, weights, LT_matrix, n_dims, n_samples, pos, Freqs_true_test, Rotmodes_true_test, Vertmodes_true_test, alpha_factors_true_test, Mfree, Ke_matrices, L_inv, folder_path):
+    L_inv_tf = tf.cast(L_inv, dtype=tf.float32)
     copula_samples, mvn_samples, mvn_model = gaussian_copula(LT_matrix, n_dims, n_samples) 
-    z_pred_samples = build_marginal_samples(locs, scales, weights, copula_samples)
+    z_samples = build_marginal_samples(locs, scales, weights, copula_samples)
+    z_samples = tf.cast(z_samples, dtype=tf.float32)
+    print("Assembling Global Stiffness...")
+    Ke_matrices_dam = tf.einsum('BE, EKQ -> BEKQ', z_samples, tf.cast(Ke_matrices, dtype=tf.float32))
+    Kfree_matrices = assemble_global_Kmatrices(Ke_matrices_dam, n_elements, n_samples)
+
+    batch_size = 512
+    all_f, all_rot, all_vert = [], [], []
+    for i in range(0, n_samples, batch_size):
+        f, r, v = physics_engine_step(Kfree_matrices[i : i + batch_size], L_inv_tf, n_modes)
+        all_f.append(f)
+        all_rot.append(r)
+        all_vert.append(v)
+
+    f_pred = np.concatenate(all_f, axis=0)      # (n_samples, 5)
+    rot_pred = np.concatenate(all_rot, axis=0)  # (n_samples, 6, 5)
+    vert_pred = np.concatenate(all_vert, axis=0) # (n_samples, 4, 5)
+    
     z_true = alpha_factors_true_test[pos] if 'alpha_factors_true_test' in locals() else None
     print(z_true)
-    expected_z = np.mean(z_pred_samples, axis=0)
-    std_z = np.std(z_pred_samples, axis=0)
+    expected_z = np.mean(z_samples, axis=0)
+    std_z = np.std(z_samples, axis=0)
+    
+    # 1. Frequency Loss (Logarithmic)
+    obs_f = Freqs_true_test[pos] # (5,)
+    f_err = np.square(np.log(obs_f) - np.log(f_pred))
+    loss_f = np.mean(f_err, axis=1) # (n_samples,)
+    
+    # 2. Mode Shape Loss (MAC-based)
+    obs_r = Rotmodes_true_test[pos]  # (6, 5)
+    obs_v = Vertmodes_true_test[pos] # (4, 5)
+    
+    # Expand obs to match batch size
+    obs_r_batch = np.repeat(obs_r[np.newaxis, :, :], n_samples, axis=0)
+    obs_v_batch = np.repeat(obs_v[np.newaxis, :, :], n_samples, axis=0)
+    
+    rot_mac = calculate_MAC(obs_r_batch, rot_pred)   # (n_samples, 5)
+    vert_mac = calculate_MAC(obs_v_batch, vert_pred) # (n_samples, 5)
+    
+    mac_combined = np.concatenate([rot_mac, vert_mac], axis=1) # (n_samples, 10)
+    loss_mac = np.mean(np.square(1 - mac_combined), axis=1)     # (n_samples,)
+    
+    # Total Data Misfit (matching ELBO logic)
+    # Note: We treat the combined loss as the negative log-likelihood scaled by beta^2
+    inv_gamma_val = 1.0 / (beta**2)
+    total_loss = loss_f + loss_mac
+    exponent = -total_loss * inv_gamma_val 
+    
+    # Normalization
+    max_exp = np.max(exponent)
+    likelihood = np.exp(exponent - max_exp)
+    posterior_pdf = likelihood / np.mean(likelihood)
 
-    # 4.2 Main Predicted Posterior Plot (Pairwise Matrices)
-    fig, axes = plt.subplots(n_elements, n_elements, figsize=(10, 10), facecolor='white')
+    # 5.1 Uncertainty Quantification
+    fig, axes = plt.subplots(n_elements, n_elements, figsize=(12, 12), facecolor='white')
     labels = [f'$z_{{{k+1}}}$' for k in range(n_elements)]
+    mask = posterior_pdf > (np.max(posterior_pdf) * 0.0001)
 
     for r in range(n_elements):
         for c in range(n_elements):
             ax = axes[r, c]
-            if r == c: # Diagonal: Physical Labels
-                ax.text(0.5, 0.5, labels[r], fontsize=22, ha='center', va='center', fontweight='bold', color='#333333')
+            if r == c: # Diagonal: Labels & Marginal Summary
+                ax.text(0.5, 0.6, labels[r], fontsize=24, ha='center', va='center', fontweight='bold')
+                if z_true is not None:
+                    ax.text(0.5, 0.3, f'True: {z_true[r]:.2f}\n$\pm${std_z[r]:.2f}', 
+                            fontsize=12, ha='center', va='center', color='red')
                 ax.set_xlim([0, 1]); ax.set_ylim([0, 1])
                 ax.axis('off')
             elif r > c: # Lower Triangle: Smooth 2D Joint PDF
                 xi, yi = np.mgrid[0:1:100j, 0:1:100j]
-                
-                # Perform KDE on the predicted samples
-                kde_coords = np.vstack([z_pred_samples[:, c], z_pred_samples[:, r]])
-                kde = gaussian_kde(kde_coords)
+                kde_coords = np.vstack([z_samples[mask, c], z_samples[mask, r]])
+                kde = gaussian_kde(kde_coords, weights=posterior_pdf[mask])
                 zi = kde(np.vstack([xi.flatten(), yi.flatten()])).reshape(xi.shape)
                 
-                # Plot density
                 ax.contourf(xi, yi, zi, levels=30, cmap='viridis', alpha=0.9)
-                ax.contour(xi, yi, zi, levels=5, colors='white', linewidths=0.3, alpha=0.2)
+                ax.contour(xi, yi, zi, levels=5, colors='white', linewidths=0.4, alpha=0.2)
                 
-                # Mark Ground Truth (Target)
                 if z_true is not None:
-                    ax.plot(z_true[c], z_true[r], 'ro', markersize=7, markeredgecolor='white', markeredgewidth=1, zorder=10)
+                    ax.plot(z_true[c], z_true[r], 'ro', markersize=8, markeredgecolor='white', zorder=10)
                 
-                if c == 0: ax.set_ylabel(labels[r], fontsize=12)
-                if r == n_elements - 1: ax.set_xlabel(labels[c], fontsize=12)
+                if c == 0: ax.set_ylabel(labels[r], fontsize=14)
+                if r == n_elements - 1: ax.set_xlabel(labels[c], fontsize=14)
                 ax.set_xlim([0, 1]); ax.set_ylim([0, 1])
-                ax.tick_params(labelsize=8)
                 ax.grid(True, linestyle=':', alpha=0.3)
             else:
                 ax.axis('off')
 
-    plt.subplots_adjust(wspace=0.1, hspace=0.1)
-    save_dir = os.path.join(folder_path, "Prediction_plots")
-    if not os.path.exists(save_dir): os.makedirs(save_dir)
-    plt.savefig(os.path.join(save_dir, f'P{pos}_Predicted_JointPosterior.png'), dpi=500, bbox_inches='tight')
-    plt.show()
-    
-    # 4.3 Physical Predicted Damage Profile
-    fig, (ax_bar, ax_beam) = plt.subplots(2, 1, figsize=(10, 6.5), gridspec_kw={'height_ratios': [4, 1]}, sharex=True)
-    
-    elements = np.arange(1, n_elements + 1)
-    color_estimate = '#4575b4' # Sophisticated Blue
-    color_true = '#d73027'     # Strong Red
-    
-    # Top Plot: Bar chart with Predicted Uncertainty
-    ax_bar.bar(elements, expected_z, yerr=std_z, color=color_estimate, alpha=0.65, 
-               label='Predicted Mean Stiffness Reduction ($E[z|\mathbf{m}]$)', 
-               capsize=8, error_kw={'elinewidth':2, 'capthick':2, 'ecolor': '#1a1a1a'})
-    
-    if z_true is not None:
-        x_step = np.arange(0.5, n_elements + 1.5, 1)
-        y_step = np.concatenate([z_true, [z_true[-1]]])
-        ax_bar.step(x_step, y_step, where='post', color=color_true, 
-                    label='True Damage State ($\mathbf{z}^*$)', linestyle='--', lw=2.5, zorder=5)
-    
-    ax_bar.set_ylabel('Stiffness Reduction ($z$)', fontsize=13, fontweight='medium')
-    ax_bar.set_ylim([0, 1.2])
-    ax_bar.legend(loc='upper center', bbox_to_anchor=(0.5, 1.18), ncol=2, frameon=False, fontsize=11)
-    ax_bar.grid(axis='y', alpha=0.2, linestyle='-')
-    
-    # Explain Predicted Uncertainty
-    props = dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='silver')
-    ax_bar.text(0.02, 0.95, "Note: Error bars denote predicted 1$\sigma$ \n(Uncertainty from Inverse Model)", 
-                transform=ax_bar.transAxes, fontsize=9, verticalalignment='top', bbox=props)
-    
-    # Physical Beam Heatmap
-    beam_viz = expected_z.reshape(1, -1)
-    im = ax_beam.imshow(beam_viz, cmap='YlGnBu', aspect='auto', extent=[0.5, n_elements + 0.5, 0, 1], vmin=0, vmax=1)
-    
-    ax_beam.set_yticks([])
-    ax_beam.set_xticks(elements)
-    ax_beam.set_xticklabels([f'Element {k}' for k in elements], fontsize=11)
-    ax_beam.tick_params(axis='x', length=0)
-    
-    for j, val in enumerate(expected_z):
-        text_color = 'white' if val > 0.6 else 'black'
-        ax_beam.text(j + 1, 0.5, f'{val:.2f}', ha='center', va='center', 
-                     color=text_color, fontweight='bold', fontsize=11)
-    
     plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, f'P{pos}_Predicted_PhysicalProfile.png'), dpi=500, bbox_inches='tight')
-    plt.show()
+    save_dir = os.path.join("MODULES", "POSTPROCESSING", "Ground_truth_plots")
+    if not os.path.exists(save_dir): os.makedirs(save_dir)
+    plt.savefig(os.path.join(save_dir, f'P{pos}_JointPosterior.png'), dpi=400, bbox_inches='tight')
+    plt.show()    
+
+
+    # # 4.2 Main Predicted Posterior Plot (Pairwise Matrices)
+    # fig, axes = plt.subplots(n_elements, n_elements, figsize=(10, 10), facecolor='white')
+    # labels = [f'$z_{{{k+1}}}$' for k in range(n_elements)]
+
+    # for r in range(n_elements):
+    #     for c in range(n_elements):
+    #         ax = axes[r, c]
+    #         if r == c: # Diagonal: Physical Labels
+    #             ax.text(0.5, 0.5, labels[r], fontsize=22, ha='center', va='center', fontweight='bold', color='#333333')
+    #             ax.set_xlim([0, 1]); ax.set_ylim([0, 1])
+    #             ax.axis('off')
+    #         elif r > c: # Lower Triangle: Smooth 2D Joint PDF
+    #             xi, yi = np.mgrid[0:1:100j, 0:1:100j]
+                
+    #             # Perform KDE on the predicted samples
+    #             kde_coords = np.vstack([z_samples[:, c], z_samples[:, r]])
+    #             kde = gaussian_kde(kde_coords)
+    #             zi = kde(np.vstack([xi.flatten(), yi.flatten()])).reshape(xi.shape)
+                
+    #             # Plot density
+    #             ax.contourf(xi, yi, zi, levels=30, cmap='viridis', alpha=0.9)
+    #             ax.contour(xi, yi, zi, levels=5, colors='white', linewidths=0.3, alpha=0.2)
+                
+    #             # Mark Ground Truth (Target)
+    #             if z_true is not None:
+    #                 ax.plot(z_true[c], z_true[r], 'ro', markersize=7, markeredgecolor='white', markeredgewidth=1, zorder=10)
+                
+    #             if c == 0: ax.set_ylabel(labels[r], fontsize=12)
+    #             if r == n_elements - 1: ax.set_xlabel(labels[c], fontsize=12)
+    #             ax.set_xlim([0, 1]); ax.set_ylim([0, 1])
+    #             ax.tick_params(labelsize=8)
+    #             ax.grid(True, linestyle=':', alpha=0.3)
+    #         else:
+    #             ax.axis('off')
+
+    # plt.subplots_adjust(wspace=0.1, hspace=0.1)
+    # save_dir = os.path.join(folder_path, "Prediction_plots")
+    # if not os.path.exists(save_dir): os.makedirs(save_dir)
+    # plt.savefig(os.path.join(save_dir, f'P{pos}_Predicted_JointPosterior.png'), dpi=500, bbox_inches='tight')
+    # plt.show()
+    
+    # # 4.3 Physical Predicted Damage Profile
+    # fig, (ax_bar, ax_beam) = plt.subplots(2, 1, figsize=(10, 6.5), gridspec_kw={'height_ratios': [4, 1]}, sharex=True)
+    
+    # elements = np.arange(1, n_elements + 1)
+    # color_estimate = '#4575b4' # Sophisticated Blue
+    # color_true = '#d73027'     # Strong Red
+    
+    # # Top Plot: Bar chart with Predicted Uncertainty
+    # ax_bar.bar(elements, expected_z, yerr=std_z, color=color_estimate, alpha=0.65, 
+    #            label='Predicted Mean Stiffness Reduction ($E[z|\mathbf{m}]$)', 
+    #            capsize=8, error_kw={'elinewidth':2, 'capthick':2, 'ecolor': '#1a1a1a'})
+    
+    # if z_true is not None:
+    #     x_step = np.arange(0.5, n_elements + 1.5, 1)
+    #     y_step = np.concatenate([z_true, [z_true[-1]]])
+    #     ax_bar.step(x_step, y_step, where='post', color=color_true, 
+    #                 label='True Damage State ($\mathbf{z}^*$)', linestyle='--', lw=2.5, zorder=5)
+    
+    # ax_bar.set_ylabel('Stiffness Reduction ($z$)', fontsize=13, fontweight='medium')
+    # ax_bar.set_ylim([0, 1.2])
+    # ax_bar.legend(loc='upper center', bbox_to_anchor=(0.5, 1.18), ncol=2, frameon=False, fontsize=11)
+    # ax_bar.grid(axis='y', alpha=0.2, linestyle='-')
+    
+    # # Explain Predicted Uncertainty
+    # props = dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='silver')
+    # ax_bar.text(0.02, 0.95, "Note: Error bars denote predicted 1$\sigma$ \n(Uncertainty from Inverse Model)", 
+    #             transform=ax_bar.transAxes, fontsize=9, verticalalignment='top', bbox=props)
+    
+    # # Physical Beam Heatmap
+    # beam_viz = expected_z.reshape(1, -1)
+    # im = ax_beam.imshow(beam_viz, cmap='YlGnBu', aspect='auto', extent=[0.5, n_elements + 0.5, 0, 1], vmin=0, vmax=1)
+    
+    # ax_beam.set_yticks([])
+    # ax_beam.set_xticks(elements)
+    # ax_beam.set_xticklabels([f'Element {k}' for k in elements], fontsize=11)
+    # ax_beam.tick_params(axis='x', length=0)
+    
+    # for j, val in enumerate(expected_z):
+    #     text_color = 'white' if val > 0.6 else 'black'
+    #     ax_beam.text(j + 1, 0.5, f'{val:.2f}', ha='center', va='center', 
+    #                  color=text_color, fontweight='bold', fontsize=11)
+    
+    # plt.tight_layout()
+    # plt.savefig(os.path.join(save_dir, f'P{pos}_Predicted_PhysicalProfile.png'), dpi=500, bbox_inches='tight')
+    # plt.show()
 
    
     

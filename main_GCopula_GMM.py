@@ -5,9 +5,8 @@ Created on Thu Feb 20 16:16:13 2025
 
 @author: afernandez
 """
-import tensorflow as tf
 import os
-
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 # # 1. Suppress annoying TF logs
 # os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
@@ -26,8 +25,9 @@ import os
 #         print("   If you just added these lines, RESTART YOUR KERNEL to apply them.")
 #         print(f"   (Error details: {e})")
         
-        
+
 import numpy as np
+import tensorflow as tf
 import tensorflow.keras as K 
 from MODULES.PREPROCESSING.preprocessing import load_data, load_known_matrices
 from MODULES.COPULAS.GC_GMm_models import My_CopulaVAE_withEigen
@@ -43,7 +43,7 @@ def main():
     # os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
    
-    tf.config.list_physical_devices('GPU')  # TODO I do not find the analogous in K .
+    # tf.config.list_physical_devices('GPU')  # TODO I do not find the analogous in K .
     K.utils.set_random_seed(1234)
     dt = 'float32' ## espcificar dtype para trabajar en float32. 
     K.backend.set_floatx(dt)
@@ -78,21 +78,21 @@ def main():
     
     ## Trainign specifications, required for the folder name 
     n_epochs = 5000
-    LR = 1e-05 # with exponent 05 I observe some moments of total loss increasing, which corresponds to a bad training.......
+    LR = 1e-04 # with exponent 05 I observe some moments of total loss increasing, which corresponds to a bad training.......
     epsi = 0.0 #Regularizer to find one single damaged element
     
     ## Bayesian specifications for the Gaussian Mixture approach 
     num_gaussians = 1
     n_dims  = alpha_factors_true_train.shape[1]
     num_samples = 1
-    beta = 0.1 ## weight factor for the Gaussian Mixture term 
+    beta = 0.04 ## weight factor for the Gaussian Mixture term 
     
-    run_eagerly = False # indicate True for debugging   
+    run_eagerly = True # indicate True for debugging   
    
 
     model = My_CopulaVAE_withEigen(input_dim, num_dofs, n_elements, n_modes, Ke_matrices, Mfree, L_inv, epsi, n_dims, num_gaussians, num_samples, beta)
     
-    filename = r"ImprovedFREQ&MACloss_Feb06_5els5modes_test_Data17MarCopula_"+str(beta)+"Beta_"+str(num_samples)+"Samples_"+str(LR)+"LR_"+str(n_epochs)+"epochs_"+str(batch_size)+"batchs"
+    filename = r"NewMACLosss_Feb07_5els5modes_test_Data17MarCopula_"+str(beta)+"Beta_"+str(num_samples)+"Samples_"+str(LR)+"LR_"+str(n_epochs)+"epochs_"+str(batch_size)+"batchs"
     
     # date = "local_Feb02_026_WarpedGaussian"+str(n_elements)+"els"+str(n_modes)+"modes_test_Data17Mar"
     # starting  = date + "Copula"
@@ -139,9 +139,8 @@ def main():
     #     print("⚠️ No se encontraron checkpoints. Empezando desde cero.")      
     
     model.compile(optimizer = K.optimizers.Adam(learning_rate = LR), loss = model.ELBO_Copula_loss, metrics = [model.Freqs_loss,model.MAC_modes_loss, model.Joint_copula_dens_term], run_eagerly = run_eagerly)
-        
-    # Instanciamos el limpiador
-    limpiador = MemoryCleaner()
+
+    
     model_history = model.fit(x = [Freqs_true_train,Rotmodes_true_train, Vertmodes_true_train, alpha_factors_true_train],
       y = alpha_factors_true_train,
       batch_size = batch_size,
@@ -178,8 +177,10 @@ def main():
     inverse_model = model.Encoder_model
     test_means, test_scales, test_weight_vals, test_offdiag_elems, test_diag_elems  = inverse_model.predict([Freqs_true_test, Rotmodes_true_test, Vertmodes_true_test, alpha_factors_true_test])
     
-    
+    pred_alphas = model.predict([Freqs_true_test, Rotmodes_true_test, Vertmodes_true_test, alpha_factors_true_test])
+    np.save(os.path.join(folder_path, "pred_alphas.npy"), pred_alphas, allow_pickle=True)
 
+    
 
     # from MODULES.COPULAS.GC_postprocessing_copulas import plot_configuration, plot_results_PDF_uncertainty
     # plot_configuration()

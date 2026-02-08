@@ -14,8 +14,8 @@ tfb = tfp.bijectors
 tfd = tfp.distributions
 
 from MODULES.COPULAS.GC_GMm_architectures import Fully_connected_enc_GC, Copula_pdf_layer, Fully_connected_dec
-# from MODULES.COPULAS.GC_GMm_eigen_functions import Solve_eigenproblem, SolveEigenproblemStable, assemble_global_Kmatrices
-from MODULES.COPULAS.GC_GMm_GPU_eigen_functions import Solve_eigenproblem, SolveEigenproblemStable, assemble_global_Kmatrices
+from MODULES.COPULAS.GC_GMm_eigen_functions import Solve_eigenproblem, SolveEigenproblemStable, assemble_global_Kmatrices
+# from MODULES.COPULAS.GC_GMm_GPU_eigen_functions import Solve_eigenproblem, SolveEigenproblemStable, assemble_global_Kmatrices
 
 
 @tf.function(jit_compile = True)
@@ -161,116 +161,48 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         # Return physical alphas (useful for plotting/debugging)
         return self.reshaped_alpha_samples
     
-    def Freqs_loss(self, y_true, y_pred):
-        """
-        Robust Sorted Frequency Loss.
-        Ignores Shape Matching logic (which causes the '80.0' error) and 
-        strictly forces the predicted frequency spectrum to match the target spectrum.
-        """
-        # 1. Flatten True Frequencies into a single list per batch
-        # We assume self.freq_data is (Batch, 10) or similar. 
-        # If it is split (Rot/Vert), concat them first.
-        # (Assuming self.freq_data contains all frequencies)
-        true_freqs = self.freq_data 
-        
-        # 2. Sort True Frequencies (Small -> Large)
-        # This ensures we compare the 1st mode to the 1st mode, etc.
-        true_freqs_sorted = tf.sort(true_freqs, axis=1)
-        
-        # 3. Get Pred Frequencies
-        # Eigh outputs are ALWAYS sorted, so we don't strictly need to sort again,
-        # but it's safe to do so.
-        pred_freqs_sorted = self.pred_freqs
-        
-        # 4. Compute Loss (Log Squared Error)
-        # We use a tiny clamp (1e-4) just to prevent NaN if the model predicts 0.0
-        safe_true = tf.maximum(true_freqs_sorted, 1e-4)
-        safe_pred = tf.maximum(pred_freqs_sorted, 1e-4)
-        
-        Freqs_sq_error = tf.square(tf.math.log(safe_true) - tf.math.log(safe_pred))
-        
-        Loss_freqs = tf.math.reduce_mean(Freqs_sq_error)
-        
-        return Loss_freqs
-    
     # def Freqs_loss(self, y_true, y_pred):
     #     """
-    #     Robust Frequency Loss.
-    #     SIMPLIFIED: Assumes self.rot_modes_data is already (Batch, N, D).
+    #     Robust Sorted Frequency Loss.
+    #     Ignores Shape Matching logic (which causes the '80.0' error) and 
+    #     strictly forces the predicted frequency spectrum to match the target spectrum.
     #     """
-    #     # ==============================================================================
-    #     # 1. POOL TRUE MODES
-    #     # ==============================================================================
-    #     # We assume self.rot_modes_data is already shape (Batch, 6, 5)
-    #     # We assume self.vert_modes_data is already shape (Batch, 4, 5)
+    #     # 1. Flatten True Frequencies into a single list per batch
+    #     # We assume self.freq_data is (Batch, 10) or similar. 
+    #     # If it is split (Rot/Vert), concat them first.
+    #     # (Assuming self.freq_data contains all frequencies)
+    #     true_freqs = self.freq_data 
         
-    #     # Simply concatenate them. No repeating needed.
-    #     true_pool_modes = tf.concat([self.rot_modes_data, self.vert_modes_data], axis=1)
-
-    #     # ==============================================================================
-    #     # 2. POOL TRUE FREQUENCIES (Align to Mode Order)
-    #     # ==============================================================================
-    #     # We assume self.freq_data is shape (Batch, 10)
+    #     # 2. Sort True Frequencies (Small -> Large)
+    #     # This ensures we compare the 1st mode to the 1st mode, etc.
+    #     true_freqs_sorted = tf.sort(true_freqs, axis=1)
         
-    #     # Prepare Indices to reorder sorted freqs -> [Rot_List, Vert_List]
-    #     n_total = 10 
-    #     all_idx = tf.range(n_total)
+    #     # 3. Get Pred Frequencies
+    #     # Eigh outputs are ALWAYS sorted, so we don't strictly need to sort again,
+    #     # but it's safe to do so.
+    #     pred_freqs_sorted = self.pred_freqs
         
-    #     # Logic: Rot are [0, 2, 4, 6, 8, 9], Vert are [1, 3, 5, 7]
-    #     idx_main = all_idx[:-1]
-    #     rot_idx = tf.concat([idx_main[0::2], all_idx[-1:]], axis=0) 
-    #     vert_idx = idx_main[1::2] 
-    #     perm_indices = tf.concat([rot_idx, vert_idx], axis=0)
-
-    #     # Gather True Frequencies in the correct order
-    #     # We perform this on axis=1 (the features dim), respecting the batch dim automatically
-    #     true_pool_freqs = tf.gather(self.freq_data, perm_indices, axis=1)
-
-    #     # ==============================================================================
-    #     # 3. POOL PREDICTED MODES & FREQUENCIES
-    #     # ==============================================================================
-    #     pred_pool_modes = tf.concat([self.pred_rotmodes, self.pred_vertmodes], axis=1)
-    #     pred_pool_freqs = tf.gather(self.pred_freqs, perm_indices, axis=1)
-
-    #     # ==============================================================================
-    #     # 4. MATCHING (Permutation Invariant)
-    #     # ==============================================================================
-    #     # Normalize
-    #     eps = 1e-6
-    #     true_norm = tf.math.l2_normalize(true_pool_modes + eps, axis=2)
-    #     pred_norm = tf.math.l2_normalize(pred_pool_modes + eps, axis=2)
-
-    #     # Gram Matrix: (Batch, 10, 10)
-    #     # This will now work because both inputs are (Batch, 10, 5)
-    #     gram_matrix = tf.matmul(true_norm, pred_norm, transpose_b=True)
-    #     mac_matrix = tf.square(gram_matrix)
-
-    #     # Find Best Match Indices
-    #     best_match_indices = tf.argmax(mac_matrix, axis=2)
-
-    #     # ==============================================================================
-    #     # 5. COMPUTE LOSS
-    #     # ==============================================================================
-    #     # Gather the predicted frequencies that match our true mode shapes
-    #     matched_pred_freqs = tf.gather(pred_pool_freqs, best_match_indices, batch_dims=1)
-
-    #     # Log-Safe Loss
-    #     safe_true = tf.maximum(true_pool_freqs, 1e-4)
-    #     safe_pred = tf.maximum(matched_pred_freqs, 1e-4)
-
+    #     # 4. Compute Loss (Log Squared Error)
+    #     # We use a tiny clamp (1e-4) just to prevent NaN if the model predicts 0.0
+    #     safe_true = tf.maximum(true_freqs_sorted, 1e-4)
+    #     safe_pred = tf.maximum(pred_freqs_sorted, 1e-4)
+        
     #     Freqs_sq_error = tf.square(tf.math.log(safe_true) - tf.math.log(safe_pred))
         
-    #     return tf.math.reduce_mean(Freqs_sq_error)
+    #     Loss_freqs = tf.math.reduce_mean(Freqs_sq_error)
+        
+    #     return Loss_freqs
     
     
-    # def Freqs_loss(self, y_true, y_pred):
-    #     true_freqs = self.freq_data
-    #     true_freqs = tf.repeat(true_freqs[:,:,tf.newaxis], self.num_samples, axis = 2)
-    #     true_freqs = tf.reshape(tf.transpose(true_freqs, perm = [0,2,1]), [-1,y_true.shape[1]])
-    #     pred_freqs = self.pred_freqs
-    #     Freqs_sq_error = tf.square(tf.math.log(true_freqs) - tf.math.log(pred_freqs))
-    #     Loss_freqs = tf.math.reduce_mean(Freqs_sq_error, axis = None)
-        # return Loss_freqs
+    
+    def Freqs_loss(self, y_true, y_pred):
+        true_freqs = self.freq_data
+        true_freqs = tf.repeat(true_freqs[:,:,tf.newaxis], self.num_samples, axis = 2)
+        true_freqs = tf.reshape(tf.transpose(true_freqs, perm = [0,2,1]), [-1,y_true.shape[1]])
+        pred_freqs = self.pred_freqs
+        Freqs_sq_error = tf.square(tf.math.log(true_freqs) - tf.math.log(pred_freqs))
+        Loss_freqs = tf.math.reduce_mean(Freqs_sq_error, axis = None)
+        return Loss_freqs
     
     # def MAC_modes_loss(self, y_true, y_pred):
     #     True_rotmodes, True_vertmodes  = self.rot_modes_data, self.vert_modes_data
@@ -361,7 +293,7 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
     
     
     def Alpha_regularizer(self, y_true, y_pred):
-        # Operates on Physical Alphas (y_pred), so no change needed
+        # Operates on Physical Alphas (y_pred)
         min_value = tf.reduce_min(y_pred, axis=-1, keepdims=False)
         Regularizer = tf.math.reduce_mean(tf.math.reduce_sum(y_pred,axis = -1)-min_value)/(y_pred.shape[-1])-1
         return self.epsi*Regularizer

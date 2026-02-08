@@ -110,6 +110,8 @@ def gaussian_marginal_samples(locs, scales, copula_samples):
     return marginal_samples
 
 
+
+
 # @tf.function(jit_compile=True)
 # def gaussian_marginal_samples(locs, scales, copula_samples):
 #     """
