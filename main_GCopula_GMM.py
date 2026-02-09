@@ -6,7 +6,7 @@ Created on Thu Feb 20 16:16:13 2025
 @author: afernandez
 """
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 # # 1. Suppress annoying TF logs
 # os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
@@ -38,7 +38,6 @@ def main():
     # import os
     # # 1. Hide the GPU from TensorFlow (This stops the ptxas crash)
     # os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-
     # # 2. Fix the library conflict (This stops the CPU silent crash)
     # os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
@@ -60,15 +59,16 @@ def main():
     # total_dofs = 2*(num_elements +1) = 12 for 5 elements. From there you must remove 1 dofs at the limit nodes, resulting in 8-2 = 6 as the num_dofs
     Freqs_true_train, Rotmodes_true_train, Vertmodes_true_train, alpha_factors_true_train, Freqs_true_val, Rotmodes_true_val, Vertmodes_true_val, alpha_factors_true_val, Freqs_true_test, Rotmodes_true_test, Vertmodes_true_test, alpha_factors_true_test =  load_data(data_path, batch_size)
     
-    ## Removing some modes (rather than creating a new database with less modes): 
-    # Assuming that we retain only the first ones: 
+    # ## Removing some modes (rather than creating a new database with less modes): 
+    # # Assuming that we retain only the first ones: 
     # n_modes = 2
     # Freqs_true_train, Freqs_true_val, Freqs_true_test = Freqs_true_train[:,0:n_modes], Freqs_true_val[:,0:n_modes], Freqs_true_test[:,0:n_modes]
     # Rotmodes_true_train, Rotmodes_true_val, Rotmodes_true_test = Rotmodes_true_train[:,:,0:n_modes], Rotmodes_true_val[:,:,0:n_modes], Rotmodes_true_test[:,:,0:n_modes]
     # Vertmodes_true_train, Vertmodes_true_val, Vertmodes_true_test = Vertmodes_true_train[:,:,0:n_modes], Vertmodes_true_val[:,:,0:n_modes], Vertmodes_true_test[:,:,0:n_modes]    
-    # positions = [11, 17,22,25,34,45]
+    # # positions = [11, 17,22,25,34,45]
 
     # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    run_eagerly = False # indicate True for debugging   
     #Specifiy models and training 
     input_dim = Freqs_true_train.shape[1]+(Rotmodes_true_train.shape[1]*Rotmodes_true_train.shape[2]) + (Vertmodes_true_train.shape[1]* Vertmodes_true_train.shape[2])
     n_modes = Freqs_true_train.shape[1] #the number of modes we want to operate with 
@@ -77,22 +77,22 @@ def main():
     Mfree, Ke_matrices, L_inv = load_known_matrices(data_path, n_elements)
     
     ## Trainign specifications, required for the folder name 
-    n_epochs = 5000
-    LR = 1e-04 # with exponent 05 I observe some moments of total loss increasing, which corresponds to a bad training.......
+    n_epochs = 20000
+    LR = 1e-05 # with exponent 05 I observe some moments of total loss increasing, which corresponds to a bad training.......
     epsi = 0.0 #Regularizer to find one single damaged element
     
     ## Bayesian specifications for the Gaussian Mixture approach 
     num_gaussians = 1
     n_dims  = alpha_factors_true_train.shape[1]
     num_samples = 1
-    beta = 0.04 ## weight factor for the Gaussian Mixture term 
-    
-    run_eagerly = True # indicate True for debugging   
-   
+    beta = 0.2 ## weight factor for the Gaussian Mixture term    
 
     model = My_CopulaVAE_withEigen(input_dim, num_dofs, n_elements, n_modes, Ke_matrices, Mfree, L_inv, epsi, n_dims, num_gaussians, num_samples, beta)
-    
-    filename = r"NewMACLosss_Feb07_5els5modes_test_Data17MarCopula_"+str(beta)+"Beta_"+str(num_samples)+"Samples_"+str(LR)+"LR_"+str(n_epochs)+"epochs_"+str(batch_size)+"batchs"
+    # in GemFix::
+        # we modified the calculation of the correlation matrix using only offdiagonal entries and the diagonal ones can be obtained from the off-diag using bijector.Cholesky. 
+        # We introduced an initialization in the offdiagonal entries layer (in architecture). Particularly:
+            # kernel_initializer='zeros', kernel_regularizer=tf.keras.regularizers.l2(0.01),
+    filename = r"GemFix_LRdecay_10Feb_OLDLosses_5els5modes_test_Data17MarCopula_"+str(beta)+"Beta_"+str(num_samples)+"Samples_"+str(LR)+"LR_"+str(n_epochs)+"epochs_"+str(batch_size)+"batchs"
     
     # date = "local_Feb02_026_WarpedGaussian"+str(n_elements)+"els"+str(n_modes)+"modes_test_Data17Mar"
     # starting  = date + "Copula"
@@ -102,43 +102,12 @@ def main():
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
     
-    # # 1. Definir la ruta del checkpoint
-    # checkpoint_path = os.path.join("Output", "checkpoints", "cp-{epoch:04d}.ckpt")
-    # checkpoint_dir = os.path.dirname(checkpoint_path)
     
-    # # 2. ¡IMPORTANTE! Crear la carpeta 'checkpoints' si no existe
-    # if not os.path.exists(checkpoint_dir):
-    #     os.makedirs(checkpoint_dir)
-    #     print(f"✅ Carpeta de checkpoints creada en: {checkpoint_dir}")
-    
-    # # 3. Callback para guardar (Checkpoint)
-    # cp_callback = tf.keras.callbacks.ModelCheckpoint(
-    #     filepath=checkpoint_path, 
-    #     verbose=1, 
-    #     save_weights_only=True,
-    #     save_freq='epoch',
-    #     period = 50
-    # )
-    
-    # # 4. Callback para limpiar memoria (Garbage Collector)
-    import gc
-    class MemoryCleaner(tf.keras.callbacks.Callback):
-        def on_epoch_end(self, epoch, logs=None):
-            gc.collect() # Solo usamos gc.collect(), es mas seguro durante el entrenamiento
-                
-    # # --- BLOQUE DE RECUPERACIÓN ---
-    # # Busca el último checkpoint guardado en la carpeta
-    # latest = tf.train.latest_checkpoint(checkpoint_dir)
-    
-    # if latest:
-    #     print(f"🔄 Cargando pesos desde: {latest}")
-    #     # Cargar pesos (expect_partial evita errores si faltan variables del optimizador)
-    #     model.load_weights(latest).expect_partial()
-    #     print("✅ ¡Pesos cargados! Continuamos desde donde se quedó.")
-    # else:
-    #     print("⚠️ No se encontraron checkpoints. Empezando desde cero.")      
-    
-    model.compile(optimizer = K.optimizers.Adam(learning_rate = LR), loss = model.ELBO_Copula_loss, metrics = [model.Freqs_loss,model.MAC_modes_loss, model.Joint_copula_dens_term], run_eagerly = run_eagerly)
+    lr_schedule = tf.keras.optimizers.schedules.PiecewiseConstantDecay(
+        boundaries=[1000,10000], 
+        values=[1e-6, 1e-5, 1e-6] # Warmup -> Train -> Fine-tune
+    )
+    model.compile(optimizer = K.optimizers.Adam(learning_rate = lr_schedule, global_clipnorm=1.0), loss = model.ELBO_Copula_loss, metrics = [model.Freqs_loss,model.MAC_modes_loss, model.Joint_copula_dens_term], run_eagerly = run_eagerly)
 
     
     model_history = model.fit(x = [Freqs_true_train,Rotmodes_true_train, Vertmodes_true_train, alpha_factors_true_train],
@@ -147,7 +116,7 @@ def main():
       epochs = n_epochs,
       shuffle = True,
       validation_data = ([Freqs_true_val,Rotmodes_true_val, Vertmodes_true_val, alpha_factors_true_val], alpha_factors_true_val),
-      callbacks = [MemoryCleaner()])
+      callbacks = [])
     
     
     Problem_info = {
@@ -180,7 +149,48 @@ def main():
     pred_alphas = model.predict([Freqs_true_test, Rotmodes_true_test, Vertmodes_true_test, alpha_factors_true_test])
     np.save(os.path.join(folder_path, "pred_alphas.npy"), pred_alphas, allow_pickle=True)
 
+    # # 1. Definir la ruta del checkpoint
+    # checkpoint_path = os.path.join("Output", "checkpoints", "cp-{epoch:04d}.ckpt")
+    # checkpoint_dir = os.path.dirname(checkpoint_path)
     
+    # # 2. ¡IMPORTANTE! Crear la carpeta 'checkpoints' si no existe
+    # if not os.path.exists(checkpoint_dir):
+    #     os.makedirs(checkpoint_dir)
+    #     print(f"✅ Carpeta de checkpoints creada en: {checkpoint_dir}")
+    
+    # # 3. Callback para guardar (Checkpoint)
+    # cp_callback = tf.keras.callbacks.ModelCheckpoint(
+    #     filepath=checkpoint_path, 
+    #     verbose=1, 
+    #     save_weights_only=True,
+    #     save_freq='epoch',
+    #     period = 50
+    # )
+    
+    # # # 4. Callback para limpiar memoria (Garbage Collector)
+    # import gc
+    # class MemoryCleaner(tf.keras.callbacks.Callback):
+    #     def on_epoch_end(self, epoch, logs=None):
+    #         gc.collect() # Solo usamos gc.collect(), es mas seguro durante el entrenamiento
+                
+    # # --- BLOQUE DE RECUPERACIÓN ---
+    # # Busca el último checkpoint guardado en la carpeta
+    # latest = tf.train.latest_checkpoint(checkpoint_dir)
+    
+    # if latest:
+    #     print(f"🔄 Cargando pesos desde: {latest}")
+    #     # Cargar pesos (expect_partial evita errores si faltan variables del optimizador)
+    #     model.load_weights(latest).expect_partial()
+    #     print("✅ ¡Pesos cargados! Continuamos desde donde se quedó.")
+    # else:
+    #     print("⚠️ No se encontraron checkpoints. Empezando desde cero.")      
+    # Create a schedule: Start at 1e-4, drop to 1e-5, then 1e-6
+    # lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+    #     initial_learning_rate=1e-4,
+    #     decay_steps=1000,
+    #     decay_rate=0.9,
+    #     staircase=True
+    # )
 
     # from MODULES.COPULAS.GC_postprocessing_copulas import plot_configuration, plot_results_PDF_uncertainty
     # plot_configuration()

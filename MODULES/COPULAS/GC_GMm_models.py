@@ -14,8 +14,8 @@ tfb = tfp.bijectors
 tfd = tfp.distributions
 
 from MODULES.COPULAS.GC_GMm_architectures import Fully_connected_enc_GC, Copula_pdf_layer, Fully_connected_dec
-from MODULES.COPULAS.GC_GMm_eigen_functions import Solve_eigenproblem, SolveEigenproblemStable, assemble_global_Kmatrices
-# from MODULES.COPULAS.GC_GMm_GPU_eigen_functions import Solve_eigenproblem, SolveEigenproblemStable, assemble_global_Kmatrices
+# from MODULES.COPULAS.GC_GMm_eigen_functions import Solve_eigenproblem, SolveEigenproblemStable, assemble_global_Kmatrices
+from MODULES.COPULAS.GC_GMm_GPU_eigen_functions import Solve_eigenproblem, SolveEigenproblemStable, assemble_global_Kmatrices
 
 
 @tf.function(jit_compile = True)
@@ -204,24 +204,24 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         Loss_freqs = tf.math.reduce_mean(Freqs_sq_error, axis = None)
         return Loss_freqs
     
-    # def MAC_modes_loss(self, y_true, y_pred):
-    #     True_rotmodes, True_vertmodes  = self.rot_modes_data, self.vert_modes_data
+    def MAC_modes_loss(self, y_true, y_pred):
+        True_rotmodes, True_vertmodes  = self.rot_modes_data, self.vert_modes_data
         
-    #     true_rotmodes = tf.repeat(True_rotmodes[:,:,:,tf.newaxis], self.num_samples, axis = 3)
-    #     true_rotmodes = tf.reshape(tf.transpose(true_rotmodes, perm = [0,3,1,2]), [-1,True_rotmodes.shape[1], True_rotmodes.shape[2]])
+        true_rotmodes = tf.repeat(True_rotmodes[:,:,:,tf.newaxis], self.num_samples, axis = 3)
+        true_rotmodes = tf.reshape(tf.transpose(true_rotmodes, perm = [0,3,1,2]), [-1,True_rotmodes.shape[1], True_rotmodes.shape[2]])
         
-    #     true_vertmodes = tf.repeat(True_vertmodes[:,:,:, tf.newaxis], self.num_samples, axis = 3)
-    #     true_vertmodes = tf.reshape(tf.transpose(true_vertmodes, perm = [0,3,1,2]), [-1,True_vertmodes.shape[1], True_vertmodes.shape[2]])
+        true_vertmodes = tf.repeat(True_vertmodes[:,:,:, tf.newaxis], self.num_samples, axis = 3)
+        true_vertmodes = tf.reshape(tf.transpose(true_vertmodes, perm = [0,3,1,2]), [-1,True_vertmodes.shape[1], True_vertmodes.shape[2]])
         
-    #     pred_rotmodes, pred_vertmodes = self.pred_rotmodes, self.pred_vertmodes
+        pred_rotmodes, pred_vertmodes = self.pred_rotmodes, self.pred_vertmodes
         
-    #     Rot_MACs = calculate_MAC(true_rotmodes, pred_rotmodes) 
-    #     Vert_MACs = calculate_MAC(true_vertmodes, pred_vertmodes) 
-    #     MACs = tf.concat([Rot_MACs, Vert_MACs], axis=1)
-    #     neg_MACs = tf.square(1 - MACs) ## I use tfsquare because in ELBO eq it should be the discrepancy times the discrepancy. 
-    #     Loss_MAC = tf.math.reduce_mean(neg_MACs, axis  = None)
+        Rot_MACs = calculate_MAC(true_rotmodes, pred_rotmodes) 
+        Vert_MACs = calculate_MAC(true_vertmodes, pred_vertmodes) 
+        MACs = tf.concat([Rot_MACs, Vert_MACs], axis=1)
+        neg_MACs = tf.square(1 - MACs) ## I use tfsquare because in ELBO eq it should be the discrepancy times the discrepancy. 
+        Loss_MAC = tf.math.reduce_mean(neg_MACs, axis  = None)
         
-    #     return Loss_MAC 
+        return Loss_MAC 
     
 
     def compute_best_match_loss(self, true_modes, pred_modes):
@@ -259,37 +259,37 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         
         return loss
 
-    def MAC_modes_loss(self, y_true, y_pred):
-        """
-        Computes a loss that allows modes to change order (swap slots)
-        without penalizing the model.
-        """
-        # --- 1. Data Preparation (Same as your original) ---
-        True_rotmodes, True_vertmodes = self.rot_modes_data, self.vert_modes_data
+    # def MAC_modes_loss(self, y_true, y_pred):
+    #     """
+    #     Computes a loss that allows modes to change order (swap slots)
+    #     without penalizing the model.
+    #     """
+    #     # --- 1. Data Preparation (Same as your original) ---
+    #     True_rotmodes, True_vertmodes = self.rot_modes_data, self.vert_modes_data
         
-        # Expand and reshape True Rotational Modes
-        true_rotmodes = tf.repeat(True_rotmodes[:,:,:,tf.newaxis], self.num_samples, axis=3)
-        true_rotmodes = tf.reshape(tf.transpose(true_rotmodes, perm=[0,3,1,2]), 
-                                   [-1, True_rotmodes.shape[1], True_rotmodes.shape[2]])
+    #     # Expand and reshape True Rotational Modes
+    #     true_rotmodes = tf.repeat(True_rotmodes[:,:,:,tf.newaxis], self.num_samples, axis=3)
+    #     true_rotmodes = tf.reshape(tf.transpose(true_rotmodes, perm=[0,3,1,2]), 
+    #                                [-1, True_rotmodes.shape[1], True_rotmodes.shape[2]])
         
-        # Expand and reshape True Vertical Modes
-        true_vertmodes = tf.repeat(True_vertmodes[:,:,:, tf.newaxis], self.num_samples, axis=3)
-        true_vertmodes = tf.reshape(tf.transpose(true_vertmodes, perm=[0,3,1,2]), 
-                                    [-1, True_vertmodes.shape[1], True_vertmodes.shape[2]])
+    #     # Expand and reshape True Vertical Modes
+    #     true_vertmodes = tf.repeat(True_vertmodes[:,:,:, tf.newaxis], self.num_samples, axis=3)
+    #     true_vertmodes = tf.reshape(tf.transpose(true_vertmodes, perm=[0,3,1,2]), 
+    #                                 [-1, True_vertmodes.shape[1], True_vertmodes.shape[2]])
         
-        pred_rotmodes, pred_vertmodes = self.pred_rotmodes, self.pred_vertmodes
+    #     pred_rotmodes, pred_vertmodes = self.pred_rotmodes, self.pred_vertmodes
         
-        # --- 2. Calculate Robust Loss (The Fix) ---
-        # We calculate the loss for Rot and Vert separately using the "Best Match" logic
-        # This function generates a matrix of shape (Batch, N_true, N_pred)
+    #     # --- 2. Calculate Robust Loss (The Fix) ---
+    #     # We calculate the loss for Rot and Vert separately using the "Best Match" logic
+    #     # This function generates a matrix of shape (Batch, N_true, N_pred)
 
-        loss_rot = self.compute_best_match_loss(true_rotmodes, pred_rotmodes)
-        loss_vert = self.compute_best_match_loss(true_vertmodes, pred_vertmodes)
+    #     loss_rot = self.compute_best_match_loss(true_rotmodes, pred_rotmodes)
+    #     loss_vert = self.compute_best_match_loss(true_vertmodes, pred_vertmodes)
         
-        # Combine them (Average)
-        Loss_MAC = 0.5 * (loss_rot + loss_vert)
+    #     # Combine them (Average)
+    #     Loss_MAC = 0.5 * (loss_rot + loss_vert)
         
-        return Loss_MAC
+    #     return Loss_MAC
     
     
     def Alpha_regularizer(self, y_true, y_pred):

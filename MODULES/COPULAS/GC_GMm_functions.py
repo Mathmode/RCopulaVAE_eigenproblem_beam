@@ -106,7 +106,7 @@ def gaussian_marginal_samples(locs, scales, copula_samples):
         scales with shape (batch_size, num_gaussians =1, n_dims)
         copula_samples with shape (batch_size, num_samples, n_dims)
     """
-    marginal_samples = tfd.TruncatedNormal(loc=locs, scale=scales, low=-0.001, high=1.001).quantile(copula_samples)
+    marginal_samples = tfd.TruncatedNormal(loc=locs, scale=scales, low=-0.001, high=1.000).quantile(copula_samples)
     return marginal_samples
 
 

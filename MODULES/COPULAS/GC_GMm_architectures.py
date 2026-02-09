@@ -6,6 +6,9 @@ Created on Thu Jan 23 17:56:02 2025
 @author: afernandez
 """
 import tensorflow as tf
+import tensorflow_probability as tfp
+tfd = tfp.distributions
+tfb = tfp.bijectors
 import tensorflow.keras as K 
 from MODULES.COPULAS.GC_GMm_functions import gaussian_copula_samples, gaussian_marginal_samples, build_correlation_matrices_from_cholesky
 # from MODULES.TRAINING.rotation_matrices_funtions import copula_batch_givens_rotation
@@ -31,8 +34,8 @@ def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians):
      
     ## Lmatrix Elements to build directly the lower triangular matrix rather than the correlation
     n_correlations  = n_dims*(n_dims-1)//2
-    off_diag_L_elems = K.layers.Dense(n_correlations, activation='linear', name='off_diag_elements')(lay3)
-    
+    off_diag_L_elems = K.layers.Dense(n_correlations, activation='linear', kernel_initializer='zeros', kernel_regularizer=tf.keras.regularizers.l2(0.01), name='off_diag_elements')(lay3)
+
     # off_diag_L_elems = off_diag_L_elems +1e-07 
     diag_L_elems = K.layers.Dense(n_dims, activation = 'softplus', name = 'diag_elements')(lay3)
     diag_L_elems = diag_L_elems+1e-07
@@ -69,7 +72,14 @@ class Copula_pdf_layer(tf.keras.layers.Layer):
         tf.debugging.assert_all_finite(weight_vals, "weight_vals contains NaN or Inf")
         tf.debugging.assert_all_finite(offdiag_elems, "offdiag contains NaN or Inf")
 
-        LT_matrices  = build_correlation_matrices_from_cholesky(offdiag_elems, diag_elems, self.n_dims)
+        # --- THE FIX: Construct Correlation Cholesky ---
+        # efficiently maps unconstrained vector -> Cholesky Factor of Correlation Matrix
+        # L * L.T will have 1.0 on diagonal.
+        bijector = tfb.CorrelationCholesky()
+        LT_matrices = bijector.forward(offdiag_elems)
+
+
+        # LT_matrices  = build_correlation_matrices_from_cholesky(offdiag_elems, diag_elems, self.n_dims)
         copula_samples = gaussian_copula_samples(LT_matrices, self.n_dims, self.num_samples)
         
         # marginal_sampless = build_marginal_samples(means, scales, weight_vals, copula_samples)

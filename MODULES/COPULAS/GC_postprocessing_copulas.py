@@ -400,6 +400,7 @@ def plot_results_PDF_uncertainty(model, beta, n_elements, n_modes, locs, scales,
     copula_samples, mvn_samples, mvn_model = gaussian_copula(LT_matrix, n_dims, n_samples) 
     z_samples = build_marginal_samples(locs, scales, weights, copula_samples)
     z_samples = tf.cast(z_samples, dtype=tf.float32)
+    z_samples = z_samples.numpy()
     print("Assembling Global Stiffness...")
     Ke_matrices_dam = tf.einsum('BE, EKQ -> BEKQ', z_samples, tf.cast(Ke_matrices, dtype=tf.float32))
     Kfree_matrices = assemble_global_Kmatrices(Ke_matrices_dam, n_elements, n_samples)
@@ -486,7 +487,7 @@ def plot_results_PDF_uncertainty(model, beta, n_elements, n_modes, locs, scales,
                 ax.axis('off')
 
     plt.tight_layout()
-    save_dir = os.path.join("MODULES", "POSTPROCESSING", "Ground_truth_plots")
+    save_dir = os.path.join(folder_path, "Predicted_Posteriors")
     if not os.path.exists(save_dir): os.makedirs(save_dir)
     plt.savefig(os.path.join(save_dir, f'P{pos}_JointPosterior.png'), dpi=400, bbox_inches='tight')
     plt.show()    
@@ -533,6 +534,7 @@ def plot_results_PDF_uncertainty(model, beta, n_elements, n_modes, locs, scales,
     # plt.savefig(os.path.join(save_dir, f'P{pos}_Predicted_JointPosterior.png'), dpi=500, bbox_inches='tight')
     # plt.show()
     
+    ## comment until you are happy with a 
     # # 4.3 Physical Predicted Damage Profile
     # fig, (ax_bar, ax_beam) = plt.subplots(2, 1, figsize=(10, 6.5), gridspec_kw={'height_ratios': [4, 1]}, sharex=True)
     
