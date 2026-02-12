@@ -13,36 +13,126 @@ import tensorflow.keras as K
 from MODULES.COPULAS.GC_GMm_functions import gaussian_copula_samples, gaussian_marginal_samples, build_correlation_matrices_from_cholesky
 # from MODULES.TRAINING.rotation_matrices_funtions import copula_batch_givens_rotation
 
+def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians):
+    """
+    Fully Connected Encoder Architecture.
+    
+    Robustness Update:
+    - Reverted to 'relu' activation for maximum stability and standard behavior.
+    - Kept L2 regularization to prevent overfitting.
+    - Outputs GMM parameters: Means, Sigmas, Weights, and Cholesky factors (L).
+    """
+    input1 = K.Input(shape=(input_dim,), name='Innnputlayer')
+    
+    # LAYER 1: Robust 'relu' activation
+    lay1 = K.layers.Dense(1024, activation='relu', 
+                          kernel_initializer="he_uniform", bias_initializer="zeros", 
+                          name='lay1',
+                          kernel_regularizer=tf.keras.regularizers.l2(1e-5))(input1) 
+    
+    # LAYER 2: Robust 'relu' activation
+    lay2 = K.layers.Dense(1024, activation='relu',
+                          kernel_initializer="he_uniform", bias_initializer="zeros",
+                          name='lay2',
+                          kernel_regularizer=tf.keras.regularizers.l2(1e-5))(lay1)
+    
+    # LAYER 3: Robust 'relu' activation
+    lay3 = K.layers.Dense(1024, activation='relu', 
+                          kernel_initializer="he_uniform", bias_initializer="zeros", 
+                          name='lay3',
+                          kernel_regularizer=tf.keras.regularizers.l2(1e-5))(lay2)
+
+    # OUTPUTS
+    
+    # MEANS
+    # Using Sigmoid + scaling to keep means strictly within (0, 1) range
+    means = K.layers.Dense(n_dims*num_gaussians, activation='sigmoid',
+                           kernel_initializer='zeros', 
+                           bias_initializer=tf.keras.initializers.RandomUniform(minval=-4.0, maxval=4.0), 
+                           name='means')(lay3)
+    means = 1e-6 + 0.999 * means 
+
+    # SIGMAS
+    # Sigmoid + scaling ensures positive, bounded standard deviations
+    sigmas = K.layers.Dense(n_dims*num_gaussians, activation='sigmoid', name='stddevs')(lay3)
+    sigmas = 1e-6 + 0.999 * sigmas 
+      
+    # CORRELATION (L-Matrix for Cholesky Decomp)
+    # L-matrix elements for covariance
+    n_correlations = n_dims*(n_dims-1)//2
+    off_diag_L_elems = K.layers.Dense(n_correlations, activation='linear', name='off_diag_elements')(lay3)
+    
+    diag_L_elems = K.layers.Dense(n_dims, activation='softplus', name='diag_elements')(lay3)
+    diag_L_elems = diag_L_elems + 1e-6
+
+    # WEIGHTS
+    # Softplus ensures weights are positive
+    weight_vals = K.layers.Dense(n_dims*num_gaussians, activation='softplus', name='weights')(lay3)
+    
+    outputs = tf.concat([means, sigmas, weight_vals, off_diag_L_elems, diag_L_elems], axis=1)
+    return K.Model(inputs=input1, outputs=outputs)
+
 
 # Inverse architecture:
-def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians):
-    input1 = K.Input(shape =(input_dim,), name = 'Innnputlayer')
-    lay1 = K.layers.Dense(20, activation = 'relu', kernel_initializer="he_uniform", bias_initializer="zeros",  name='lay1',
-                      kernel_regularizer=tf.keras.regularizers.l2(0.001))(input1) #Intermediate layers
-    lay2 = K.layers.Dense(100, activation = 'tanh')(lay1) #Intermediate layers
-    lay3 = K.layers.Dense(500, activation = 'relu', kernel_initializer="he_uniform", bias_initializer="zeros", name = 'lay4')(lay2) #Intermediate layers
+# def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians):
+#     input1 = K.Input(shape =(input_dim,), name = 'Innnputlayer')
+#     lay1 = K.layers.Dense(1024, activation = 'relu', kernel_initializer="he_uniform", bias_initializer="zeros",  name='lay1',
+#                       kernel_regularizer=tf.keras.regularizers.l2(0.001))(input1) #Intermediate layers
+#     lay2 = K.layers.Dense(1024, activation = 'tanh')(lay1) #Intermediate layers
+#     lay3 = K.layers.Dense(1024, activation = 'relu', kernel_initializer="he_uniform", bias_initializer="zeros", name = 'lay4')(lay2) #Intermediate layers
+#     # MEANS
+#     means = K.layers.Dense(n_dims*num_gaussians, activation = 'sigmoid',
+#     kernel_initializer='zeros', 
+#     bias_initializer=tf.keras.initializers.RandomUniform(minval=-4.0, maxval=4.0), name = 'means')(lay3)
+#     means = 1e-07 + 0.99 * means  # Example: Scale/shift if needed.  Good practice.
 
-    # MEANS
-    means = K.layers.Dense(n_dims*num_gaussians, activation = 'sigmoid',
-    kernel_initializer='zeros', 
-    bias_initializer=tf.keras.initializers.RandomUniform(minval=-4.0, maxval=4.0), name = 'means')(lay3)
-    means = 1e-07 + 0.99 * means  # Example: Scale/shift if needed.  Good practice.
-
-    #SIGMAS
-    sigmas = K.layers.Dense(n_dims*num_gaussians, activation = 'sigmoid', name = 'stddevs')(lay3)
-    sigmas = 1e-07 + 0.99 * sigmas # Scale and shift: sigmas will be in [0.01, 1.00].  ESSENTIAL for stability.
+#     #SIGMAS
+#     sigmas = K.layers.Dense(n_dims*num_gaussians, activation = 'sigmoid', name = 'stddevs')(lay3)
+#     sigmas = 1e-07 + 0.99 * sigmas # Scale and shift: sigmas will be in [0.01, 1.00].  ESSENTIAL for stability.
      
-    ## Lmatrix Elements to build directly the lower triangular matrix rather than the correlation
-    n_correlations  = n_dims*(n_dims-1)//2
-    off_diag_L_elems = K.layers.Dense(n_correlations, activation='linear', kernel_initializer='zeros', kernel_regularizer=tf.keras.regularizers.l2(0.01), name='off_diag_elements')(lay3)
+#     ## Lmatrix Elements to build directly the lower triangular matrix rather than the correlation
+#     n_correlations  = n_dims*(n_dims-1)//2
+#     off_diag_L_elems = K.layers.Dense(n_correlations, activation='linear', name='off_diag_elements')(lay3)
+#     # kernel_initializer=tf.keras.initializers.RandomNormal(stddev=0.01),
+#     #                                kernel_regularizer=tf.keras.regularizers.l2(0.01)
+#     # off_diag_L_elems = off_diag_L_elems +1e-07 
+#     diag_L_elems = K.layers.Dense(n_dims, activation = 'softplus', name = 'diag_elements')(lay3)
+#     diag_L_elems = diag_L_elems + 1e-07
+#     #WEIGHTS: first sofplus because the condition of Sumup to 1 must be stasify for each dimension, not for all the weights together.
+#     weight_vals = K.layers.Dense(n_dims*num_gaussians, activation = 'softplus', name = 'weights')(lay3) # Enforce the weights to be positive only.
+#     outputs = tf.concat([means, sigmas, weight_vals, off_diag_L_elems, diag_L_elems], axis = 1)
+#     return K.Model(inputs = input1, outputs = outputs)
 
-    # off_diag_L_elems = off_diag_L_elems +1e-07 
-    diag_L_elems = K.layers.Dense(n_dims, activation = 'softplus', name = 'diag_elements')(lay3)
-    diag_L_elems = diag_L_elems+1e-07
-    #WEIGHTS: first sofplus because the condition of Sumup to 1 must be stasify for each dimension, not for all the weights together.
-    weight_vals = K.layers.Dense(n_dims*num_gaussians, activation = 'softplus', name = 'weights')(lay3) # Enforce the weights to be positive only.
-    outputs = tf.concat([means, sigmas, weight_vals, off_diag_L_elems, diag_L_elems], axis = 1)
-    return K.Model(inputs = input1, outputs = outputs)
+# # Inverse architecture:
+# def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians):
+#     input1 = K.Input(shape =(input_dim,), name = 'Innnputlayer')
+#     lay1 = K.layers.Dense(20, activation = 'relu', kernel_initializer="he_uniform", bias_initializer="zeros",  name='lay1',
+#                       kernel_regularizer=tf.keras.regularizers.l2(0.001))(input1) #Intermediate layers
+#     lay2 = K.layers.Dense(100, activation = 'tanh')(lay1) #Intermediate layers
+#     lay3 = K.layers.Dense(500, activation = 'relu', kernel_initializer="he_uniform", bias_initializer="zeros", name = 'lay4')(lay2) #Intermediate layers
+# # lay 3 was 500 
+#     # MEANS
+#     means = K.layers.Dense(n_dims*num_gaussians, activation = 'sigmoid',
+#     kernel_initializer='zeros', 
+#     bias_initializer=tf.keras.initializers.RandomUniform(minval=-4.0, maxval=4.0), name = 'means')(lay3)
+#     means = 1e-07 + 0.99 * means  # Example: Scale/shift if needed.  Good practice.
+
+#     #SIGMAS
+#     sigmas = K.layers.Dense(n_dims*num_gaussians, activation = 'sigmoid', name = 'stddevs')(lay3)
+#     sigmas = 1e-07 + 0.99 * sigmas # Scale and shift: sigmas will be in [0.01, 1.00].  ESSENTIAL for stability.
+     
+#     ## Lmatrix Elements to build directly the lower triangular matrix rather than the correlation
+#     n_correlations  = n_dims*(n_dims-1)//2
+#     off_diag_L_elems = K.layers.Dense(n_correlations, activation='linear', name='off_diag_elements')(lay3)
+#     # kernel_initializer=tf.keras.initializers.RandomNormal(stddev=0.01),
+#     #                                kernel_regularizer=tf.keras.regularizers.l2(0.01)
+#     # off_diag_L_elems = off_diag_L_elems +1e-07 
+#     diag_L_elems = K.layers.Dense(n_dims, activation = 'softplus', name = 'diag_elements')(lay3)
+#     diag_L_elems = diag_L_elems + 1e-07
+#     #WEIGHTS: first sofplus because the condition of Sumup to 1 must be stasify for each dimension, not for all the weights together.
+#     weight_vals = K.layers.Dense(n_dims*num_gaussians, activation = 'softplus', name = 'weights')(lay3) # Enforce the weights to be positive only.
+#     outputs = tf.concat([means, sigmas, weight_vals, off_diag_L_elems, diag_L_elems], axis = 1)
+#     return K.Model(inputs = input1, outputs = outputs)
 
 
 class Copula_pdf_layer(tf.keras.layers.Layer):
@@ -72,14 +162,30 @@ class Copula_pdf_layer(tf.keras.layers.Layer):
         tf.debugging.assert_all_finite(weight_vals, "weight_vals contains NaN or Inf")
         tf.debugging.assert_all_finite(offdiag_elems, "offdiag contains NaN or Inf")
 
-        # --- THE FIX: Construct Correlation Cholesky ---
-        # efficiently maps unconstrained vector -> Cholesky Factor of Correlation Matrix
-        # L * L.T will have 1.0 on diagonal.
-        bijector = tfb.CorrelationCholesky()
-        LT_matrices = bijector.forward(offdiag_elems)
+        # # --- ROBUST CORRELATION CONSTRUCTION ---
+        # # 1. Map flat parameters to a Lower Triangular Matrix
+        # # (This utility converts vector -> Lower Triangular Matrix)
+        # # You can use tfp.math.fill_triangular or a custom mask.
+        # import tensorflow_probability as tfp
+        # V = tfp.math.fill_triangular(offdiag_elems)
+        
+        # # 2. The Stability Fix: Row Normalization
+        # # We want the rows to have unit norm.
+        # # L_ij = V_ij / sqrt(sum(V_ik^2))
+        
+        # # Calculate row norms (safe division)
+        # # axis=2 because shape is (Batch, N, N)
+        # row_norms = tf.norm(V, axis=2, keepdims=True) + 1e-6 
+        
+        # # Normalize
+        # LT_matrices = V / row_norms
+        
+        # # 3. Verify (Optional mental check)
+        # # Covariance = L @ L.T
+        # # Diag(Cov) = Row_Norms^2 = 1.0.  Perfection.
+                
 
-
-        # LT_matrices  = build_correlation_matrices_from_cholesky(offdiag_elems, diag_elems, self.n_dims)
+        LT_matrices  = build_correlation_matrices_from_cholesky(offdiag_elems, diag_elems, self.n_dims)
         copula_samples = gaussian_copula_samples(LT_matrices, self.n_dims, self.num_samples)
         
         # marginal_sampless = build_marginal_samples(means, scales, weight_vals, copula_samples)
