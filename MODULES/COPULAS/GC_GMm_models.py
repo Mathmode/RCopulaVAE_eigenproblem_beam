@@ -173,8 +173,8 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         # Returns: Freqs (B, M), RotModes (B, M, N), VertModes (B, M, N)
         self.pred_freqs, self.pred_rotmodes, self.pred_vertmodes = self.Eigen_solver(Kfree)
         self.pred_freqs = tf.abs(self.pred_freqs) 
-        tf.print("-------------------------------------------")
-        tf.print("example of predicted freqs", self.pred_freqs[0,:])
+        # tf.print("-------------------------------------------")
+        # tf.print("example of predicted freqs", self.pred_freqs[0,:])
         
         # [
         #     self.reshaped_alpha_samples, 

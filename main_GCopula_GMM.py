@@ -87,7 +87,7 @@ def main():
     num_gaussians = 1
     n_dims = alpha_factors_true_train.shape[1]
     num_samples = 1 # Samples for training (Monte Carlo integration in loss)
-    beta = 0.5   # Weight for the Joint Copula Loss term
+    beta = 0.25  # Weight for the Joint Copula Loss term
 
     print(f"Initializing Model with Total DOFs: {n_dofs}, Fixed Indices: {fixed_dofs_indices}")
     
