@@ -36,18 +36,16 @@ tfd = tfp.distributions
 
 # --- LOCAL IMPORTS (Preserving your structure) ---
 from MODULES.PREPROCESSING.preprocessing import load_data, load_known_matrices
-from MODULES.COPULAS.GC_GMm_models import My_CopulaVAE_withEigen, calculate_MAC
-from MODULES.COPULAS.GC_GMm_GPU_eigen_functions import assemble_global_Kmatrices, Solve_eigenproblem
-
+from MODULES.COPULAS.GC_GMm_models import My_CopulaVAE_withEigen
 from MODULES.COPULAS.GC_GMm_functions import build_correlation_matrices_from_cholesky
-from MODULES.COPULAS.GC_postprocessing_copulas import build_marginal_samples,  gaussian_copula 
+from MODULES.COPULAS.GC_plot_posteriors import plot_results_PDF_uncertainty
 
 
 def main():
     K.backend.set_floatx('float32') 
 
     # --- Config ---
-    filename = "Bayesian_Beta0.1_Samples1_LR0.0001_Epochs10000"
+    filename = "Bayesian_MACloss_Beta0.25_Samples1_LR0.0001_Epochs10000"
     folder_path = os.path.join('Output', 'Gaussian_Copula', filename)
     
     # Load Problem Info
@@ -161,9 +159,9 @@ def main():
     }
     
     # --- Visualization Loop ---
-    # positions = [0, 1, 7, 9, 11, 17, 25, 34, 45, 100, 138, 219, 234, 343, 456, 555, 612, 690, 761]
+    positions = [0, 1, 7, 9, 11, 17, 25, 34, 45, 100, 138, 219, 234, 343, 456, 555, 612, 690, 761]
     # positions  = [2,20,21,41,43,48,50,63, 64, 65, 77, 78, 91,92,98,99,102,560,576]
-    positions = [300,301,302,303,304,305,310,311,312,313,314,315,321,322,323]
+    # positions = [300,301,302,303,304,305,310,311,312,313,314,315,321,322,323]
     # 
     
     n_samples = 1000 

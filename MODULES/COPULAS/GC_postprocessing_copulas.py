@@ -362,8 +362,7 @@ def plot_KDE_pdf(locs, scales, weights, LT_matrix, n_dims, n_samples, pos,  fold
     # plt.close()
       
 
-from MODULES.COPULAS.GC_GMm_eigen_functions import assemble_global_Kmatrices
-# %% 2. Physics Engine & MAC Calculation
+# %% 2. MAC and Physics Engine
 def calculate_MAC(phi_true, phi_pred):
     """
     Computes MAC: (phi_t^T * phi_p)^2 / ((phi_t^T * phi_t) * (phi_p^T * phi_p))
@@ -456,6 +455,7 @@ def physics_engine_step(K_batch, L_inv_tf, n_modes, free_dofs, n_dofs):
 
         return f_Hz.numpy(), rot_final.numpy(), vert_final.numpy()
     
+from MODULES.COPULAS.GC_GMm_GPU_eigen_functions import assemble_global_Kmatrices
   
 def plot_results_PDF_uncertainty(model, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
                                  predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, folder_path):
