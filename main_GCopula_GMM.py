@@ -79,18 +79,17 @@ def main():
     n_modes = Freqs_true_train.shape[1]
     
     # Training Hyperparameters
-    n_epochs = 10000
-    base_lr = 1e-4
+    n_epochs = 20000
+    base_lr = 1e-5
     epsi = 0.0 # Regularizer weight
     
     # Copula/GMM Hyperparameters
     num_gaussians = 1
     n_dims = alpha_factors_true_train.shape[1]
     num_samples = 1 # Samples for training (Monte Carlo integration in loss)
-    beta = 0.25  # Weight for the Joint Copula Loss term
+    beta = 0.3  # Weight for the Joint Copula Loss term
 
     print(f"Initializing Model with Total DOFs: {n_dofs}, Fixed Indices: {fixed_dofs_indices}")
-    
     # Instantiate Model
     # IMPORTANT: We pass 'n_dofs' (Total) not 'num_dofs' (Free), 
     # because the solver needs to reconstruct the full shape.
@@ -116,7 +115,7 @@ def main():
     run_eagerly = False # Set True only for debugging
     
     # Output Directory
-    filename = f"Bayesian_MACloss_Beta{beta}_Samples{num_samples}_LR{base_lr}_Epochs{n_epochs}"
+    filename = f"13Feb_Bayesian_MACloss_Beta{beta}_Samples{num_samples}_LR{base_lr}_Epochs{n_epochs}"
     folder_path = os.path.join('Output', "Gaussian_Copula", filename)
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)

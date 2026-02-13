@@ -71,9 +71,7 @@ def calculate_MAC(phi_true, phi_pred):
     
     return numerator / denominator
 
-# =============================================================================
-# 2. MAIN VISUALIZATION FUNCTION (Using your provided structure)
-# =============================================================================
+
 def physics_engine_step(K_batch, L_inv_tf, n_modes, free_dofs, n_dofs):
     """
     K_batch: (Batch, Free_DOF, Free_DOF)
