@@ -79,7 +79,7 @@ def main():
     n_modes = Freqs_true_train.shape[1]
     
     # Training Hyperparameters
-    n_epochs = 20000
+    n_epochs = 50000
     base_lr = 1e-5
     epsi = 0.0 # Regularizer weight
     
@@ -87,7 +87,7 @@ def main():
     num_gaussians = 1
     n_dims = alpha_factors_true_train.shape[1]
     num_samples = 1 # Samples for training (Monte Carlo integration in loss)
-    beta = 0.3  # Weight for the Joint Copula Loss term
+    beta = 0.25 # Weight for the Joint Copula Loss term
 
     print(f"Initializing Model with Total DOFs: {n_dofs}, Fixed Indices: {fixed_dofs_indices}")
     # Instantiate Model
@@ -115,7 +115,7 @@ def main():
     run_eagerly = False # Set True only for debugging
     
     # Output Directory
-    filename = f"13Feb_Bayesian_MACloss_Beta{beta}_Samples{num_samples}_LR{base_lr}_Epochs{n_epochs}"
+    filename = f"24Feb_Bayesian_MACloss_Beta{beta}_Samples{num_samples}_LR{base_lr}_Epochs{n_epochs}"
     folder_path = os.path.join('Output', "Gaussian_Copula", filename)
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
@@ -123,11 +123,11 @@ def main():
     # Learning Rate Schedule
     lr_schedule = tf.keras.optimizers.schedules.PiecewiseConstantDecay(
         boundaries=[1000, 8000], 
-        values=[1e-5, 1e-4, 1e-5] 
+        values=[1e-6, 1e-5, 1e-6] 
     )
     
     # Compile
-    optimizer = K.optimizers.Adam(learning_rate=1e-4, clipnorm=1.0)
+    optimizer = K.optimizers.Adam(learning_rate=base_lr, clipnorm=1.0)
     
     model.compile(
         optimizer=optimizer, 

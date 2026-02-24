@@ -15,6 +15,8 @@ from scipy.stats import gaussian_kde
 from sklearn.neighbors import KernelDensity
 from scipy import stats
 import seaborn as sns
+import matplotlib.colors as mcolors
+import matplotlib.cm as cm
 
 #Graph configuration function (font sizes)
 def plot_configuration():
@@ -147,6 +149,94 @@ def physics_engine_step(K_batch, L_inv_tf, n_modes, free_dofs, n_dofs):
     
 from MODULES.COPULAS.GC_GMm_GPU_eigen_functions import assemble_global_Kmatrices
   
+def calculate_posterior_PDF_info(model, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
+                                 predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, folder_path):
+    
+    """
+    Generates uncertainty plots for a specific test sample 'pos'.
+    """
+    # Unpack stats for this specific sample
+    locs = predicted_stats['test_means'][pos,:]
+    scales = predicted_stats['test_scales'][pos,:] 
+    LT_matrix = predicted_stats['test_L_matrices'][pos,:] 
+    
+    Freqs_true = test_datasets['Freqs_true_test']
+    Rotmodes_true = test_datasets['Rotmodes_true_test']
+    Vertmodes_true = test_datasets['Vertmodes_true_test']
+    Alphas_true = test_datasets['alpha_factors_true_test']
+    z_true = Alphas_true[pos,:]
+
+    n_dims = locs.shape[1]
+    n_elements = n_dims
+    
+    
+    print(f"\n--- Analyzing Sample #{pos} ---")
+    
+    # 1. GENERATE SAMPLES
+    L_inv_tf = tf.cast(L_inv, dtype=tf.float32)
+    copula_samples, mvn_samples, mvn_model = gaussian_copula(LT_matrix, n_dims, n_samples) 
+    z_samples = gaussian_marginal_samples(locs, scales, copula_samples)
+    z_samples = tf.cast(z_samples, dtype=tf.float32)
+    z_samples = z_samples.numpy()
+    
+    # 2. PHYSICS PROPAGATION (Vectorized on GPU/CPU)
+    print(f"Propagating {n_samples} samples through Physics Engine...")
+    # B. Assemble Global K
+    print("Assembling Global Stiffness...")
+    Ke_matrices_dam = tf.einsum('BE, EKQ -> BEKQ', z_samples, tf.cast(Ke_matrices, dtype=tf.float32))
+    Kfree_matrices = assemble_global_Kmatrices(Ke_matrices_dam, n_elements, n_samples, model.fixed_dofs_indices)
+    
+    # C. Solve Eigenproblem (Using the Model's Layer for consistency)
+    batch_size = 256
+    all_f, all_rot, all_vert = [], [], []
+    for i in range(0, n_samples, batch_size):
+        f, r, v = physics_engine_step(Kfree_matrices[i : i + batch_size], L_inv_tf, n_modes, free_dofs, n_dofs)
+        all_f.append(f)
+        all_rot.append(r)
+        all_vert.append(v)
+        
+    f_pred = tf.concat(all_f, axis=0).numpy()      # (n_samples, n_modes)
+    rot_pred = tf.concat(all_rot, axis=0).numpy()  # (n_samples, n_modes, n_nodes)
+    vert_pred = tf.concat(all_vert, axis=0).numpy() # (n_samples, n_modes, n_nodes)
+    
+    # 3. CALCULATE POSTERIOR (DATA MISFIT)
+    log_obs_f = Freqs_true[pos]     # (n_modes,)
+    obs_r = Rotmodes_true[pos]  # (n_modes, n_nodes)
+    obs_v = Vertmodes_true[pos] # (n_modes, n_nodes)
+    
+    # A. Frequency Loss
+    pred_log = np.log(f_pred)
+    pred_logscaled = (pred_log - mean_freq) / std_freq
+    f_err = np.square(log_obs_f -pred_logscaled)
+    loss_f = np.mean(f_err, axis=1) # (n_samples,)
+
+    
+    # B. MAC Loss
+    obs_r_batch = tf.convert_to_tensor(np.repeat(obs_r[np.newaxis, :, :], n_samples, axis=0), dtype=tf.float32)
+    obs_v_batch = tf.convert_to_tensor(np.repeat(obs_v[np.newaxis, :, :], n_samples, axis=0), dtype=tf.float32)
+    
+    # Note: calculate_MAC is assumed to return MAC per sample per mode
+    mac_mat_r = calculate_MAC(obs_r_batch, tf.convert_to_tensor(rot_pred)) # (n_samples, n_modes)
+    mac_mat_v = calculate_MAC(obs_v_batch, tf.convert_to_tensor(vert_pred)) # (n_samples, n_modes)
+    
+    # FIXED: mac_mat is already (n_samples, n_modes). We take the mean across modes (axis=1)
+    # If calculate_MAC returned (samples, modes_true, modes_pred), you'd use axis=2, but your shapes show (1000, 6).
+    best_r = mac_mat_r if isinstance(mac_mat_r, np.ndarray) else mac_mat_r.numpy()
+    best_v = mac_mat_v if isinstance(mac_mat_v, np.ndarray) else mac_mat_v.numpy()
+    
+    loss_mac = np.mean((1.0 - best_r) + (1.0 - best_v), axis=1) 
+    
+    # C. Total Loss & Likelihood
+    inv_gamma_val = 1.0 / (beta**2)
+    total_loss = loss_f + loss_mac 
+    
+    exponent = -total_loss * inv_gamma_val
+    max_exp = np.max(exponent)
+    likelihood = np.exp(exponent - max_exp)
+    posterior_weights = likelihood / np.sum(likelihood) 
+    
+    return z_true, z_samples, posterior_weights
+
 def plot_results_PDF_uncertainty(model, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
                                  predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, folder_path):
     """
@@ -270,7 +360,8 @@ def plot_results_PDF_uncertainty(model, n_modes, beta, n_samples, pos, n_dofs, f
                     
                     # # Ground truth line
                     # ax.axvline(z_true[r], color='red', linestyle='--', lw=2, label='True')
-                    
+                    ax.text(0.5, 0.3, labels[r], fontsize=20, ha='center', va='center', fontweight='bold', transform=ax.transAxes)
+
                     # Formatting
                     # ax.set_title(f"{labels[r]}\nTrue: {z_true[r]:.2f}", fontsize=10)
                     ax.set_xlim(0, 1)
@@ -298,16 +389,16 @@ def plot_results_PDF_uncertainty(model, n_modes, beta, n_samples, pos, n_dofs, f
                     
                     # Add Ground Truth point
                     ax.plot(z_true[c], z_true[r], color='red', marker='*', 
-                            markersize=12, markeredgecolor='white', label='Truth')
+                            markersize=14, markeredgecolor='white', label='Truth')
                     
                 except Exception as e:
                     # Fallback to scatter if KDE fails (e.g. singular matrix)
                     ax.scatter(x_vals, y_vals, c=w_filtered, s=2, cmap='viridis', alpha=0.3)
-                    ax.plot(z_true[c], z_true[r], 'r*', markersize=10)
+                    ax.plot(z_true[c], z_true[r], 'r*', markersize=18)
 
                 # Axis Labels
-                if c == 0: ax.set_ylabel(labels[r], fontsize=12)
-                if r == n_elements - 1: ax.set_xlabel(labels[c], fontsize=12)
+                if c == 0: ax.set_ylabel(labels[r], fontsize=18)
+                if r == n_elements - 1: ax.set_xlabel(labels[c], fontsize=18)
                 
                 ax.set_xlim(0, 1)
                 ax.set_ylim(0, 1)
@@ -315,8 +406,35 @@ def plot_results_PDF_uncertainty(model, n_modes, beta, n_samples, pos, n_dofs, f
                 
             else: # Upper Triangle: Empty or hidden
                 ax.axis('off')
+                
+            # Refine axis ticks: hide inner labels to make a true corner plot
+            if r >= c:
+                ax.tick_params(labelsize=18)
+                if c == 0: 
+                    if r != 0: ax.set_ylabel(labels[r], fontsize=18)
+                else:
+                    ax.tick_params(labelleft=False)
+                    
+                if r == n_elements - 1: 
+                    ax.set_xlabel(labels[c], fontsize=18)
+                else:
+                    ax.tick_params(labelbottom=False)        
+    # 1. Add Global Colorbar using the captured contour (`cf`)
+    if cf is not None:
+        cbar = fig.colorbar(cf, ax=axes.ravel().tolist(), shrink=0.85, pad=0.06, anchor=(0.6, 1.3))
+        cbar.set_label('Posterior density', fontsize=18)
 
-    plt.suptitle(f"Sample {pos}: Bayesian Posterior Uncertainty ($\\beta={beta}$)\nGround Truth marked in Red", fontsize=18, y=0.98)
+    # 2. Add Ground Truth Legend in the empty upper triangle
+    
+    import matplotlib.lines as mlines
+    gt_marker = mlines.Line2D([], [], color='red', marker='*', linestyle='None',
+                              markersize=18, markeredgecolor='white', label='Ground truth')
+    # Placed nicely in the upper right
+    fig.legend(handles=[gt_marker], loc='upper right', bbox_to_anchor=(0.82, 0.93), 
+               fontsize=18, frameon=True, facecolor='white', edgecolor='silver', shadow=True)
+
+    plt.tight_layout()
+    # plt.suptitle(f"Sample {pos}: Bayesian Posterior Uncertainty ($\\beta={beta}$)\nGround Truth marked in Red", fontsize=18, y=0.98)
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     
     # Save Logic
@@ -329,3 +447,376 @@ def plot_results_PDF_uncertainty(model, n_modes, beta, n_samples, pos, n_dofs, f
     plt.show()
     plt.close()
 
+
+def plot_physical_damage_profile(z_samples, posterior_weights, z_true, n_elements, pos, folder_path):
+    """
+    Visualizes the physical uncertainty of the damage estimates along a beam.
+    Generates a high-quality, journal-ready two-panel plot: 
+      1. A bar chart with 1-sigma credible intervals mapped to damage severity.
+      2. A physical 1D heatmap representing the beam's stiffness reduction and uncertainty.
+    
+    Args:
+        z_samples: (n_samples, n_elements) array of sampled stiffness reduction factors.
+        posterior_weights: (n_samples,) array of calculated likelihood/posterior weights.
+        z_true: (n_elements,) array of ground truth stiffness reduction factors.
+        n_elements: Number of elements in the beam.
+        pos: Sample ID/index (used for saving the file).
+        save_dir: Directory path where the plot will be saved.
+    """
+    
+    # 1. Calculate Expected Value and Standard Deviation (Weighted by Posterior)
+    weights_norm = posterior_weights / np.sum(posterior_weights)
+    
+    expected_z = np.average(z_samples, weights=weights_norm, axis=0)
+    variance_z = np.average((z_samples - expected_z)**2, weights=weights_norm, axis=0)
+    std_z = np.sqrt(variance_z)
+    
+    # 2. Setup Figure and Axes
+    fig, (ax_bar, ax_beam) = plt.subplots(
+        2, 1, 
+        figsize=(10, 7), 
+        gridspec_kw={'height_ratios': [3.5, 1]}, 
+        sharex=True,
+        facecolor='white'
+    )
+    
+    elements = np.arange(1, n_elements + 1)
+    
+    # Setup Semantic Colormap (Reds: White=Healthy, Dark Red=Severe Damage)
+    cmap = cm.get_cmap('Reds')
+    norm = mcolors.Normalize(vmin=0, vmax=1)
+    bar_colors = [cmap(norm(val)) for val in expected_z]
+    color_true = '#111111' # Sharp black/dark grey for the absolute truth
+    
+    # ==========================================
+    # TOP PLOT: Bar Chart with Uncertainty
+    # ==========================================
+    # Plot bars with edge colors for crispness
+    bars = ax_bar.bar(
+        elements, expected_z, yerr=std_z, 
+        color=bar_colors, edgecolor='#333333', linewidth=1.2,
+        label='Posterior Mean ($\mu$)', 
+        capsize=5, error_kw={'elinewidth': 2, 'capthick': 2, 'ecolor': '#333333'}
+    )
+    
+    # Dummy plot for the error bar legend entry
+    ax_bar.errorbar([], [], yerr=[], ecolor='#333333', capsize=5, elinewidth=2, 
+                    linestyle='None', label='$\pm 1\sigma$ Credible Interval')
+
+    # Overlay True Damage state as a continuous step line
+    if z_true is not None:
+        x_step = np.arange(0.5, n_elements + 1.5, 1)
+        y_step = np.concatenate([z_true, [z_true[-1]]])
+        ax_bar.step(
+            x_step, y_step, where='post', 
+            color=color_true, label='True Damage State ($z^*$)', 
+            linestyle='--', linewidth=2.5, zorder=5
+        )
+        ax_bar.plot(elements, z_true, marker='s', linestyle='none', color=color_true, markersize=6, zorder=6)
+
+    # Top Plot Formatting
+    ax_bar.set_ylabel('Stiffness Reduction Factor ($z$)', fontsize=14, fontweight='medium')
+    
+    # Dynamically set Y-limit so error bars aren't cut off
+    max_y = max(1.1, np.max(expected_z + std_z) * 1.15)
+    ax_bar.set_ylim([0, max_y])
+    
+    ax_bar.tick_params(axis='y', labelsize=12)
+    ax_bar.grid(axis='y', alpha=0.3, linestyle=':')
+    ax_bar.spines['top'].set_visible(False)
+    ax_bar.spines['right'].set_visible(False)
+    
+    # Move legend outside to keep data clear
+    ax_bar.legend(loc='upper center', bbox_to_anchor=(0.5, 1.25), ncol=3, frameon=False, fontsize=12)
+    
+    # ==========================================
+    # BOTTOM PLOT: Physical Beam Heatmap
+    # ==========================================
+    beam_viz = expected_z.reshape(1, -1)
+    
+    im = ax_beam.imshow(
+        beam_viz, cmap=cmap, norm=norm, aspect='auto', 
+        extent=[0.5, n_elements + 0.5, 0, 1]
+    )
+    
+    # Clean up bottom axes
+    ax_beam.set_yticks([])
+    ax_beam.set_xticks(elements)
+    ax_beam.set_xticklabels([f'Element {k}' for k in elements], fontsize=13)
+    ax_beam.tick_params(axis='x', length=0, pad=10)
+    
+    # Print Explicit Diagnosis inside the beam (Mean and Std)
+    for j in range(n_elements):
+        mu = expected_z[j]
+        sig = std_z[j]
+        # Dynamically change text color for readability against dark/light backgrounds
+        text_color = 'white' if mu > 0.6 else 'black'
+        
+        # Explicitly formats as: 0.16 \n (± 0.04)
+        annotation_text = f"{mu:.2f}\n($\pm${sig:.2f})"
+        
+        ax_beam.text(
+            j + 1, 0.5, annotation_text, 
+            ha='center', va='center', color=text_color, 
+            fontweight='bold', fontsize=11, linespacing=1.5
+        )
+    
+    # Draw physical beam boundaries
+    for spine in ax_beam.spines.values():
+        spine.set_linewidth(1.5)
+        spine.set_color('black')
+        
+    # Draw simply-supported triangles at the ends (Visual grounding)
+    ax_beam.plot(0.5, 0, marker='^', markersize=16, color='black', clip_on=False, zorder=10)
+    ax_beam.plot(n_elements + 0.5, 0, marker='^', markersize=16, color='black', clip_on=False, zorder=10)
+
+    # Add Colorbar for reference
+    cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.2]) # [left, bottom, width, height]
+    cbar = fig.colorbar(im, cax=cbar_ax)
+    cbar.set_label('Severity', fontsize=11)
+    cbar.ax.tick_params(labelsize=10)
+
+    plt.tight_layout(rect=[0, 0, 0.9, 1]) # Adjust right margin to fit colorbar
+    
+    # Save the plot
+    save_dir = os.path.join(folder_path, "Physical_uncertainty_pred")
+    if not os.path.exists(save_dir): 
+        os.makedirs(save_dir)
+    
+    save_path = os.path.join(save_dir, f'Sample_{pos}_Diagnosis_Profile.png')
+    plt.savefig(save_path, dpi=400, bbox_inches='tight')
+        
+    plt.show()
+    plt.close(fig)
+    
+    
+    
+    
+    
+    
+    
+    
+# def plot_physical_damage_profile(z_samples, posterior_weights, z_true, n_elements, pos, save_dir):
+#     """
+#     Visualizes the physical uncertainty of the damage estimates along a beam.
+#     Generates a high-quality two-panel plot: 
+#       1. A bar chart with 1-sigma credible intervals.
+#       2. A physical 1D heatmap representing the beam's stiffness reduction.
+    
+#     Args:
+#         z_samples: (n_samples, n_elements) array of sampled stiffness reduction factors.
+#         posterior_weights: (n_samples,) array of calculated likelihood/posterior weights.
+#         z_true: (n_elements,) array of ground truth stiffness reduction factors.
+#         n_elements: Number of elements in the beam.
+#         pos: Sample ID/index (used for saving the file).
+#         save_dir: Directory path where the plot will be saved.
+#     """
+    
+#     # 1. Calculate Expected Value and Standard Deviation (Weighted by Posterior)
+#     # Ensure weights sum exactly to 1 for accurate statistical calculation
+#     weights_norm = posterior_weights / np.sum(posterior_weights)
+    
+#     expected_z = np.average(z_samples, weights=weights_norm, axis=0)
+#     variance_z = np.average((z_samples - expected_z)**2, weights=weights_norm, axis=0)
+#     std_z = np.sqrt(variance_z)
+    
+#     # 2. Setup Figure and Axes
+#     fig, (ax_bar, ax_beam) = plt.subplots(
+#         2, 1, 
+#         figsize=(10, 6.5), 
+#         gridspec_kw={'height_ratios': [4, 1.2]}, 
+#         sharex=True,
+#         facecolor='white'
+#     )
+    
+#     elements = np.arange(1, n_elements + 1)
+    
+#     # Sophisticated Color Palette
+#     color_estimate = '#4575b4' # Calm Blue for probabilistic estimates
+#     color_true = '#d73027'     # Strong Red for the absolute truth
+    
+#     # ==========================================
+#     # TOP PLOT: Bar Chart with Uncertainty
+#     # ==========================================
+#     ax_bar.bar(
+#         elements, expected_z, yerr=std_z, 
+#         color=color_estimate, alpha=0.75, edgecolor='none',
+#         label='Estimated Stiffness Reduction ($\mu \pm 1\sigma$)', 
+#         capsize=6, error_kw={'elinewidth': 2.5, 'capthick': 2.5, 'ecolor': '#1a1a1a'}
+#     )
+    
+#     # Overlay True Damage state as a continuous step line
+#     if z_true is not None:
+#         x_step = np.arange(0.5, n_elements + 1.5, 1)
+#         y_step = np.concatenate([z_true, [z_true[-1]]])
+#         ax_bar.step(
+#             x_step, y_step, where='post', 
+#             color=color_true, label='True Damage State ($z^*$)', 
+#             linestyle='--', linewidth=2.5, zorder=5
+#         )
+#         # Optional: dots at the center of the elements for absolute clarity
+#         ax_bar.plot(elements, z_true, marker='o', linestyle='none', color=color_true, markersize=5, zorder=6)
+
+#     # Top Plot Formatting
+#     ax_bar.set_ylabel('Stiffness Reduction Factor', fontsize=13, fontweight='medium')
+    
+#     # Dynamically set Y-limit so error bars aren't cut off (Minimum 1.1 height)
+#     max_y = max(1.1, np.max(expected_z + std_z) * 1.15)
+#     ax_bar.set_ylim([0, max_y])
+    
+#     ax_bar.tick_params(axis='y', labelsize=11)
+#     ax_bar.grid(axis='y', alpha=0.25, linestyle='--')
+#     ax_bar.spines['top'].set_visible(False)
+#     ax_bar.spines['right'].set_visible(False)
+    
+#     ax_bar.legend(loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=2, frameon=False, fontsize=12)
+    
+#     # Explanatory text box for the uncertainty
+#     props = dict(boxstyle='round,pad=0.4', facecolor='#f8f9fa', alpha=0.9, edgecolor='#dee2e6')
+#     ax_bar.text(
+#         0.02, 0.95, "Error bars denote the 1$\sigma$ credible interval\n(derived from VAE posterior density)", 
+#         transform=ax_bar.transAxes, fontsize=10, verticalalignment='top', bbox=props, color='#495057'
+#     )
+    
+#     # ==========================================
+#     # BOTTOM PLOT: Physical Beam Heatmap
+#     # ==========================================
+#     beam_viz = expected_z.reshape(1, -1)
+    
+#     im = ax_beam.imshow(
+#         beam_viz, cmap='YlGnBu', aspect='auto', 
+#         extent=[0.5, n_elements + 0.5, 0, 1], vmin=0, vmax=1
+#     )
+    
+#     # Clean up bottom axes
+#     ax_beam.set_yticks([])
+#     ax_beam.set_xticks(elements)
+#     ax_beam.set_xticklabels([f'Element {k}' for k in elements], fontsize=12, fontweight='medium')
+#     ax_beam.tick_params(axis='x', length=0, pad=8)
+    
+#     # Print the exact estimated numbers inside the beam
+#     for j, val in enumerate(expected_z):
+#         text_color = 'white' if val > 0.55 else 'black'
+#         ax_beam.text(
+#             j + 1, 0.5, f'{val:.2f}', 
+#             ha='center', va='center', color=text_color, 
+#             fontweight='bold', fontsize=12
+#         )
+    
+#     # Draw physical beam boundaries
+#     for spine in ax_beam.spines.values():
+#         spine.set_linewidth(1.5)
+#         spine.set_color('#111111')
+        
+#     # Draw simply-supported triangles at the ends (Visual grounding)
+#     ax_beam.plot(0.5, 0, marker='^', markersize=14, color='#333333', clip_on=False, zorder=10)
+#     ax_beam.plot(n_elements + 0.5, 0, marker='^', markersize=14, color='#333333', clip_on=False, zorder=10)
+
+#     plt.tight_layout()
+    
+#     # Save the plot
+#     if save_dir:
+#         os.makedirs(save_dir, exist_ok=True)
+#         save_path = os.path.join(save_dir, f'Sample_{pos}_PhysicalDamage_Profile.png')
+#         plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        
+#     plt.show()
+#     plt.close(fig)
+    
+    
+# def physical_uncertainty_plot(z_samples, posterior_pdf,alpha_factors_true_test, n_elements, pos, save_dir):
+#     expected_z = np.sum(z_samples * posterior_pdf[:, np.newaxis], axis=0) / np.sum(posterior_pdf)
+#     std_z = np.sqrt(np.sum(np.square(z_samples - expected_z) * posterior_pdf[:, np.newaxis], axis=0) / np.sum(posterior_pdf))
+#     z_true = alpha_factors_true_test[pos] if 'alpha_factors_true_test' in locals() else None
+    
+#     # 5.2 Main Posterior Plot (Pairwise Matrices)
+#     fig, axes = plt.subplots(n_elements, n_elements, figsize=(10, 10), facecolor='white')
+#     labels = [f'$z_{{{k+1}}}$' for k in range(n_elements)]
+#     mask = posterior_pdf > (np.max(posterior_pdf) * 0.0001)
+    
+#     for r in range(n_elements):
+#         for c in range(n_elements):
+#             ax = axes[r, c]
+#             if r == c: # Diagonal: Physical Labels
+#                 ax.text(0.5, 0.5, labels[r], fontsize=22, ha='center', va='center', fontweight='bold', color='#333333')
+#                 ax.set_xlim([0, 1]); ax.set_ylim([0, 1])
+#                 ax.axis('off')
+#             elif r > c: # Lower Triangle: Smooth 2D Joint PDF
+#                 xi, yi = np.mgrid[0:1:100j, 0:1:100j]
+#                 kde_coords = np.vstack([z_samples[mask, c], z_samples[mask, r]])
+#                 kde = gaussian_kde(kde_coords, weights=posterior_pdf[mask])
+#                 zi = kde(np.vstack([xi.flatten(), yi.flatten()])).reshape(xi.shape)
+                
+#                 ax.contourf(xi, yi, zi, levels=30, cmap='viridis', alpha=0.9)
+#                 ax.contour(xi, yi, zi, levels=5, colors='white', linewidths=0.3, alpha=0.2)
+                
+#                 if z_true is not None:
+#                     ax.plot(z_true[c], z_true[r], 'ro', markersize=7, markeredgecolor='white', markeredgewidth=1, zorder=10)
+                
+#                 if c == 0: ax.set_ylabel(labels[r], fontsize=12)
+#                 if r == n_elements - 1: ax.set_xlabel(labels[c], fontsize=12)
+#                 ax.set_xlim([0, 1]); ax.set_ylim([0, 1])
+#                 ax.tick_params(labelsize=8)
+#                 ax.grid(True, linestyle=':', alpha=0.3)
+#             else:
+#                 ax.axis('off')
+    
+#     plt.subplots_adjust(wspace=0.1, hspace=0.1)
+#     save_dir = os.path.join("MODULES", "POSTPROCESSING", "Ground_truth_plots")
+#     if not os.path.exists(save_dir): os.makedirs(save_dir)
+#     plt.savefig(os.path.join(save_dir, f'P{pos}_JointPosterior.png'), dpi=500, bbox_inches='tight')
+#     plt.show()
+    
+#     # 5.3 Enhanced Physical Damage Profile (Fancier Visuals)
+#     fig, (ax_bar, ax_beam) = plt.subplots(2, 1, figsize=(10, 6.5), gridspec_kw={'height_ratios': [4, 1]}, sharex=True)
+    
+#     elements = np.arange(1, n_elements + 1)
+#     color_estimate = '#4575b4' # Sophisticated Blue
+#     color_true = '#d73027'     # Strong Red
+    
+#     # Top Plot: Bar chart with Uncertainty
+#     ax_bar.bar(elements, expected_z, yerr=std_z, color=color_estimate, alpha=0.65, 
+#                label='Estimated Stiffness Reduction ($E[z|\mathbf{m}]$)', 
+#                capsize=8, error_kw={'elinewidth':2, 'capthick':2, 'ecolor': '#1a1a1a'})
+    
+#     if z_true is not None:
+#         # Step boundaries for 5 elements
+#         x_step = np.arange(0.5, n_elements + 1.5, 1)
+#         y_step = np.concatenate([z_true, [z_true[-1]]])
+#         ax_bar.step(x_step, y_step, where='post', color=color_true, 
+#                     label='True Damage State ($\mathbf{z}^*$)', linestyle='--', lw=2.5, zorder=5)
+    
+#     ax_bar.set_ylabel('Stiffness Reduction ($z$)', fontsize=13, fontweight='medium')
+#     ax_bar.set_ylim([0, 1.2])
+#     ax_bar.legend(loc='upper center', bbox_to_anchor=(0.5, 1.18), ncol=2, frameon=False, fontsize=11)
+#     ax_bar.grid(axis='y', alpha=0.2, linestyle='-')
+    
+#     # Add explanatory note for Uncertainty
+#     props = dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='silver')
+#     ax_bar.text(0.02, 0.95, "Note: Error bars denote the 1$\sigma$ \ncredible interval (posterior std. dev.)", 
+#                 transform=ax_bar.transAxes, fontsize=9, verticalalignment='top', bbox=props)
+    
+#     # Bottom Plot: Physical Beam Heatmap
+#     beam_viz = expected_z.reshape(1, -1)
+#     im = ax_beam.imshow(beam_viz, cmap='YlGnBu', aspect='auto', extent=[0.5, n_elements + 0.5, 0, 1], vmin=0, vmax=1)
+    
+#     # Clean up beam visualization
+#     ax_beam.set_yticks([])
+#     ax_beam.set_xticks(elements)
+#     ax_beam.set_xticklabels([f'Element {k}' for k in elements], fontsize=11)
+#     ax_beam.tick_params(axis='x', length=0)
+    
+#     # Add values and physical frame
+#     for j, val in enumerate(expected_z):
+#         text_color = 'white' if val > 0.6 else 'black'
+#         ax_beam.text(j + 1, 0.5, f'{val:.2f}', ha='center', va='center', 
+#                      color=text_color, fontweight='bold', fontsize=11)
+    
+#     # Outer beam border
+#     for spine in ax_beam.spines.values():
+#         spine.set_linewidth(1.2)
+#         spine.set_color('#333333')
+    
+#     plt.tight_layout()
+#     plt.savefig(os.path.join(save_dir, f'P{pos}_PhysicalProfile_Enhanced.png'), dpi=500, bbox_inches='tight')
+#     plt.show()
