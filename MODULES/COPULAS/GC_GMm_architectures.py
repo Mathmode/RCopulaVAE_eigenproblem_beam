@@ -10,10 +10,10 @@ import tensorflow_probability as tfp
 tfd = tfp.distributions
 tfb = tfp.bijectors
 import tensorflow.keras as K 
-from MODULES.COPULAS.GC_GMm_functions import gaussian_copula_samples, gaussian_marginal_samples, build_correlation_matrices_from_cholesky
+from MODULES.COPULAS.GC_GMm_functions import gaussian_copula_samples, gaussian_copula_samples_optimized, gaussian_marginal_samples, build_correlation_matrices_from_cholesky
 # from MODULES.TRAINING.rotation_matrices_funtions import copula_batch_givens_rotation
 
-def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians):
+def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians, lbound):
     """
     Fully Connected Encoder Architecture.
     
@@ -45,12 +45,21 @@ def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians):
     # OUTPUTS
     
     # MEANS
-    # Using Sigmoid + scaling to keep means strictly within (0, 1) range
-    means = K.layers.Dense(n_dims*num_gaussians, activation='sigmoid',
-                           kernel_initializer='zeros', 
-                           bias_initializer=tf.keras.initializers.RandomUniform(minval=-4.0, maxval=4.0), 
-                           name='means')(lay3)
-    means = 1e-6 + 0.999 * means 
+    means_raw = K.layers.Dense(n_dims * num_gaussians, activation='sigmoid',
+                        kernel_initializer='zeros', 
+                        bias_initializer='zeros', 
+                        name='means_raw')(lay3)
+    
+    # Scale means to be strictly within [lbound, 1]
+    # This prevents the TruncatedNormal loc from being outside the truncation bounds
+    means = lbound + (0.999 - lbound) * means_raw 
+    # # Using Sigmoid + scaling to keep means strictly within (0, 1) range
+    # means = K.layers.Dense(n_dims*num_gaussians, activation='sigmoid',
+    #                        kernel_initializer='zeros', 
+    #                        bias_initializer=tf.keras.initializers.RandomUniform(minval=-4.0, maxval=4.0), 
+    #                        name='means')(lay3)
+    # means = 1e-6 + 0.999 * means 
+
 
     # SIGMAS
     # Sigmoid + scaling ensures positive, bounded standard deviations
@@ -74,12 +83,12 @@ def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians):
 
 
 class Copula_pdf_layer(tf.keras.layers.Layer):
-    def __init__(self, n_dims, num_gaussians, num_samples, **kwargs):
+    def __init__(self, n_dims, num_gaussians, num_samples, lbound ,**kwargs):
         super(Copula_pdf_layer, self).__init__(**kwargs)
         self.n_dims = n_dims
         self.num_gaussians = num_gaussians
         self.num_samples = num_samples
-
+        self.lbound = lbound #lower bound for truncation 
     def call(self, inputs):
         means, scales, weight_vals, offdiag_elems, diag_elems  = inputs
  
@@ -95,9 +104,12 @@ class Copula_pdf_layer(tf.keras.layers.Layer):
         tf.debugging.assert_all_finite(offdiag_elems, "offdiag contains NaN or Inf")
                
         LT_matrices  = build_correlation_matrices_from_cholesky(offdiag_elems, diag_elems, self.n_dims)
-        copula_samples = gaussian_copula_samples(LT_matrices, self.n_dims, self.num_samples)
-        # Build samples assuming single Gaussian marginals
-        marginal_samples = gaussian_marginal_samples(means, scales, copula_samples)
+        # copula_samples = gaussian_copula_samples(LT_matrices, self.n_dims, self.num_samples, self.lbound)
+        copula_samples = gaussian_copula_samples_optimized(LT_matrices, self.n_dims, self.num_samples, self.lbound)
+        
+        
+       # Build samples assuming single Gaussian marginals
+        marginal_samples = gaussian_marginal_samples(means, scales, copula_samples, self.lbound)
         
         # Build samples assuming multimodal marginals (more expensive)
         # marginal_sampless = build_marginal_samples(means, scales, weight_vals, copula_samples)

@@ -38,14 +38,14 @@ tfd = tfp.distributions
 from MODULES.PREPROCESSING.preprocessing import load_data, load_known_matrices
 from MODULES.COPULAS.GC_GMm_models import My_CopulaVAE_withEigen
 from MODULES.COPULAS.GC_GMm_functions import build_correlation_matrices_from_cholesky
-from MODULES.COPULAS.GC_plot_posteriors import calculate_posterior_PDF_info, plot_results_PDF_uncertainty, plot_physical_damage_profile
+from MODULES.COPULAS.GC_plot_posteriors import calculate_posterior_PDF_info, plot_results_PDF_uncertainty, plot_physical_damage_profile, plot_copula_posterior_insights
 
 
 def main():
     K.backend.set_floatx('float32') 
 
     # --- Config ---
-    filename = "22Feb_Bayesian_MACloss_Beta0.3_Samples1_LR1e-05_Epochs30000"
+    filename = "26Feb_MildDam_Bayesian_MACloss_Beta0.25_Samples1_LR1e-05_Epochs30000"
     folder_path = os.path.join('Output', 'Gaussian_Copula', filename)
     
     # Load Problem Info
@@ -169,116 +169,17 @@ def main():
     
     for pos in positions:
         if pos < N_test_samples:
-            # plot_results_PDF_uncertainty(model, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
-            #                                  predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, folder_path)
-
-            z_true, z_samples, posterior_weights = calculate_posterior_PDF_info(model, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
+            plot_results_PDF_uncertainty(model, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
                                              predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, folder_path)
 
-            plot_physical_damage_profile(z_samples, posterior_weights, z_true, n_elements, pos, folder_path)
+            # z_true, z_samples, posterior_weights = calculate_posterior_PDF_info(model, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
+            #                                  predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, folder_path)
+
+            # plot_physical_damage_profile(z_samples, posterior_weights, z_true, n_elements, pos, folder_path)
+            
 
 
-
-    # %% 5. Advanced Visualization & Uncertainty Quantification
-    print(f"Analyzing and Plotting Position {pos}...")
-    
-    # 5.1 Uncertainty Quantification
-    expected_z = np.sum(z_samples * posterior_pdf[:, np.newaxis], axis=0) / np.sum(posterior_pdf)
-    std_z = np.sqrt(np.sum(np.square(z_samples - expected_z) * posterior_pdf[:, np.newaxis], axis=0) / np.sum(posterior_pdf))
-    z_true = alpha_factors_true_test[pos] if 'alpha_factors_true_test' in locals() else None
-    
-    # 5.2 Main Posterior Plot (Pairwise Matrices)
-    fig, axes = plt.subplots(n_elements, n_elements, figsize=(10, 10), facecolor='white')
-    labels = [f'$z_{{{k+1}}}$' for k in range(n_elements)]
-    mask = posterior_pdf > (np.max(posterior_pdf) * 0.0001)
-    
-    for r in range(n_elements):
-        for c in range(n_elements):
-            ax = axes[r, c]
-            if r == c: # Diagonal: Physical Labels
-                ax.text(0.5, 0.5, labels[r], fontsize=22, ha='center', va='center', fontweight='bold', color='#333333')
-                ax.set_xlim([0, 1]); ax.set_ylim([0, 1])
-                ax.axis('off')
-            elif r > c: # Lower Triangle: Smooth 2D Joint PDF
-                xi, yi = np.mgrid[0:1:100j, 0:1:100j]
-                kde_coords = np.vstack([z_samples[mask, c], z_samples[mask, r]])
-                kde = gaussian_kde(kde_coords, weights=posterior_pdf[mask])
-                zi = kde(np.vstack([xi.flatten(), yi.flatten()])).reshape(xi.shape)
-                
-                ax.contourf(xi, yi, zi, levels=30, cmap='viridis', alpha=0.9)
-                ax.contour(xi, yi, zi, levels=5, colors='white', linewidths=0.3, alpha=0.2)
-                
-                if z_true is not None:
-                    ax.plot(z_true[c], z_true[r], 'ro', markersize=7, markeredgecolor='white', markeredgewidth=1, zorder=10)
-                
-                if c == 0: ax.set_ylabel(labels[r], fontsize=12)
-                if r == n_elements - 1: ax.set_xlabel(labels[c], fontsize=12)
-                ax.set_xlim([0, 1]); ax.set_ylim([0, 1])
-                ax.tick_params(labelsize=8)
-                ax.grid(True, linestyle=':', alpha=0.3)
-            else:
-                ax.axis('off')
-    
-    plt.subplots_adjust(wspace=0.1, hspace=0.1)
-    save_dir = os.path.join("MODULES", "POSTPROCESSING", "Ground_truth_plots")
-    if not os.path.exists(save_dir): os.makedirs(save_dir)
-    plt.savefig(os.path.join(save_dir, f'P{pos}_JointPosterior.png'), dpi=500, bbox_inches='tight')
-    plt.show()
-    
-    # 5.3 Enhanced Physical Damage Profile (Fancier Visuals)
-    fig, (ax_bar, ax_beam) = plt.subplots(2, 1, figsize=(10, 6.5), gridspec_kw={'height_ratios': [4, 1]}, sharex=True)
-    
-    elements = np.arange(1, n_elements + 1)
-    color_estimate = '#4575b4' # Sophisticated Blue
-    color_true = '#d73027'     # Strong Red
-    
-    # Top Plot: Bar chart with Uncertainty
-    ax_bar.bar(elements, expected_z, yerr=std_z, color=color_estimate, alpha=0.65, 
-               label='Estimated Stiffness Reduction ($E[z|\mathbf{m}]$)', 
-               capsize=8, error_kw={'elinewidth':2, 'capthick':2, 'ecolor': '#1a1a1a'})
-    
-    if z_true is not None:
-        # Step boundaries for 5 elements
-        x_step = np.arange(0.5, n_elements + 1.5, 1)
-        y_step = np.concatenate([z_true, [z_true[-1]]])
-        ax_bar.step(x_step, y_step, where='post', color=color_true, 
-                    label='True Damage State ($\mathbf{z}^*$)', linestyle='--', lw=2.5, zorder=5)
-    
-    ax_bar.set_ylabel('Stiffness Reduction ($z$)', fontsize=13, fontweight='medium')
-    ax_bar.set_ylim([0, 1.2])
-    ax_bar.legend(loc='upper center', bbox_to_anchor=(0.5, 1.18), ncol=2, frameon=False, fontsize=11)
-    ax_bar.grid(axis='y', alpha=0.2, linestyle='-')
-    
-    # Add explanatory note for Uncertainty
-    props = dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='silver')
-    ax_bar.text(0.02, 0.95, "Note: Error bars denote the 1$\sigma$ \ncredible interval (posterior std. dev.)", 
-                transform=ax_bar.transAxes, fontsize=9, verticalalignment='top', bbox=props)
-    
-    # Bottom Plot: Physical Beam Heatmap
-    beam_viz = expected_z.reshape(1, -1)
-    im = ax_beam.imshow(beam_viz, cmap='YlGnBu', aspect='auto', extent=[0.5, n_elements + 0.5, 0, 1], vmin=0, vmax=1)
-    
-    # Clean up beam visualization
-    ax_beam.set_yticks([])
-    ax_beam.set_xticks(elements)
-    ax_beam.set_xticklabels([f'Element {k}' for k in elements], fontsize=11)
-    ax_beam.tick_params(axis='x', length=0)
-    
-    # Add values and physical frame
-    for j, val in enumerate(expected_z):
-        text_color = 'white' if val > 0.6 else 'black'
-        ax_beam.text(j + 1, 0.5, f'{val:.2f}', ha='center', va='center', 
-                     color=text_color, fontweight='bold', fontsize=11)
-    
-    # Outer beam border
-    for spine in ax_beam.spines.values():
-        spine.set_linewidth(1.2)
-        spine.set_color('#333333')
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, f'P{pos}_PhysicalProfile_Enhanced.png'), dpi=500, bbox_inches='tight')
-    plt.show()
-
+  
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ def generate_dataset(n_samples, n_elements, n_modes, data_file_path, zero_rotati
     n_nodes = n_elements + 1
     n_dofs = 2 * n_nodes
 
-    alpha_range = (0.05, 0.95)
+    alpha_range = (0.00, 0.5)
     
     # Storage lists
     frequencies_dataset = []
@@ -178,7 +178,7 @@ if __name__ == "__main__":
     # Calculate nodes for verification
     n_nodes = n_elements + 1
 
-    folder_name = f"12Feb2026_Corrected_Randomdata{n_elements}elements"
+    folder_name = f"10D_26Feb2026_MildDam05_Randomdata{n_elements}elements"
     data_file_path = os.path.join("Data", folder_name)
 
     if not os.path.exists(data_file_path):

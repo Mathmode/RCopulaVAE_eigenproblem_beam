@@ -44,7 +44,9 @@ def main():
     
     # --- 2. DATA LOADING ---
     # Path Configuration
-    data_folder = "11Feb2026_Corrected_Randomdata5elements"
+    # data_folder = "11Feb2026_Corrected_Randomdata5elements"
+    data_folder = "26Feb2026_MildDam05_Randomdata5elements"
+
     data_path = os.path.join("Data", data_folder)
     
     # System Parameters
@@ -52,6 +54,7 @@ def main():
     # Total DOFs: 2 per node, (N+1) nodes. 
     # For 5 elements: 6 nodes * 2 = 12 DOFs.
     n_dofs = 2 * (n_elements + 1) 
+    lbound = 0.5 # minimum reduction factor to truncate the marginals
     
     # Boundary Conditions: Simply Supported (Pin-Pin)
     # Fix Vertical displacement at first node (Index 0) and last node (Index 2*N)
@@ -79,7 +82,7 @@ def main():
     n_modes = Freqs_true_train.shape[1]
     
     # Training Hyperparameters
-    n_epochs = 50000
+    n_epochs = 30000
     base_lr = 1e-5
     epsi = 0.0 # Regularizer weight
     
@@ -108,6 +111,7 @@ def main():
         beta=beta,
         mean_f=mean_f,
         std_f=std_f,
+        lbound = lbound,
         fixed_dofs_indices=fixed_dofs_indices
     )
     
@@ -115,7 +119,7 @@ def main():
     run_eagerly = False # Set True only for debugging
     
     # Output Directory
-    filename = f"24Feb_Bayesian_MACloss_Beta{beta}_Samples{num_samples}_LR{base_lr}_Epochs{n_epochs}"
+    filename = f"Prueba_{lbound}lbound_27Feb_Bayesian_MACloss_Beta{beta}_Samples{num_samples}_LR{base_lr}_Epochs{n_epochs}"
     folder_path = os.path.join('Output', "Gaussian_Copula", filename)
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)

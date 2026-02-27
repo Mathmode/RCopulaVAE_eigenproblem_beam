@@ -51,12 +51,12 @@ def calculate_MAC(modes_true, modes_pred):
 
 
 class Inverse_Copula_Model(tf.keras.Model):
-    def __init__(self, input_dim_encoder, n_dims, num_gaussians, num_samples, **kwargs):
+    def __init__(self, input_dim_encoder, n_dims, num_gaussians, num_samples, lbound, **kwargs):
         super(Inverse_Copula_Model, self).__init__()
         self.n_dims = n_dims
         self.num_gaussians = num_gaussians
         self.num_samples = num_samples
-        self.FC_encoder = Fully_connected_enc_GC(input_dim_encoder, n_dims, num_gaussians)
+        self.FC_encoder = Fully_connected_enc_GC(input_dim_encoder, n_dims, num_gaussians, lbound)
 
     def call(self, inputs):
         [self.freq_data, self.rot_modes_data, self.vert_modes_data, self.alpha_factors] = inputs
@@ -99,7 +99,7 @@ class Inverse_Copula_Model(tf.keras.Model):
 # -------------------------------------------------------------------------
 
 class My_CopulaVAE_withEigen(tf.keras.Model):
-    def __init__(self, input_dim, num_dofs, n_elements, n_modes, Ke_matrices, Mfree, L_inv, epsi, n_dims, num_gaussians, num_samples, beta, mean_f, std_f, fixed_dofs_indices=None, **kwargs):
+    def __init__(self, input_dim, num_dofs, n_elements, n_modes, Ke_matrices, Mfree, L_inv, epsi, n_dims, num_gaussians, num_samples, beta, mean_f, std_f, lbound, fixed_dofs_indices=None, **kwargs):
         super(My_CopulaVAE_withEigen, self).__init__()
         self.num_dofs = num_dofs
         self.n_elements = n_elements
@@ -111,9 +111,9 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         self.L_inv = tf.constant(L_inv, dtype=tf.float32)
 
 
-        self.Encoder_model = Inverse_Copula_Model(input_dim, n_dims, num_gaussians, num_samples)
+        self.Encoder_model = Inverse_Copula_Model(input_dim, n_dims, num_gaussians, num_samples, lbound)
         self.Eigen_solver = Solve_eigenproblem(num_dofs, n_modes, L_inv, fixed_dofs_indices)
-        self.Copula_sampling_layer = Copula_pdf_layer(n_dims, num_gaussians, num_samples)
+        self.Copula_sampling_layer = Copula_pdf_layer(n_dims, num_gaussians, num_samples, lbound)
         
         # Hyperparameters
         self.mean_freq = tf.constant(mean_f, dtype=tf.float32) 
@@ -123,6 +123,7 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         self.n_dims = n_dims
         self.num_samples = num_samples
         self.beta = beta
+        self.lbound = lbound # lower bound for truncation according to z domain  (minimum reduction factor --> maximum admissible damage)
             
     def call(self, inputs):
         # Unpack Inputs: [Freqs, RotModes, VertModes, Alphas]
@@ -242,11 +243,18 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         Returns:
             log_likelihood: Tensor of shape [], the log-likelihood of the joint PDF.
         """
-                
-        # Convert uniform samples to standard normal
-        normal_samples = tfd.Normal(loc=0.0, scale=1.0).quantile(self.reshaped_copula_samples)
+        
+        # Clip copula samples slightly away from 0 and 1 to prevent Inf in quantile
+        u_clipped = tf.clip_by_value(self.reshaped_copula_samples, 1e-6, 1.0 - 1e-6)
+        normal_dist = tfd.Normal(loc=0.0, scale=1.0)
+        normal_samples = normal_dist.quantile(u_clipped)
+        
+        # # Convert uniform samples to standard normal
+        # normal_samples = tfd.Normal(loc=0.0, scale=1.0).quantile(self.reshaped_copula_samples)
+        
+        
+        
         mvn = tfd.MultivariateNormalTriL(loc = tf.zeros(self.n_dims), scale_tril = self.reshaped_LT_matrices)
-
         log_prob_joint_normal = tf.math.log(mvn.prob(normal_samples)+1e-07)
         log_prob_marginals_standard = tf.reduce_sum(tf.math.log(tfd.Normal(0.0, 1.0).prob(normal_samples)+1e-07), axis=-1)      
         
@@ -254,22 +262,39 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         return log_prob_joint_normal - log_prob_marginals_standard
     
     
-    
-    def Marginal_pdf_logprob(self,y_true, y_pred):
-        '''
-        #This one is used for Gaussian marginal directly (known inverse CDF)
-        Here we calculate the log probability of the samples over the marginal distributions 
-        We have n_dims marginals to consider. 
-        The inputs are taken from the self, and include the marginal_samples, and the marginals parameters 
-        The output will be the log_probs with shape [batch_size, num_samples]
-        '''
-        # Taking into account that here we have only one gaussian, we can neglect the dimension of num_gaussians as it is simply 1. 
-        gaussian_marginals = tfd.TruncatedNormal(loc=self.reshaped_means[:,0,:], scale=self.reshaped_scales[:,0,:], low=-0.0001, high=1.0001)
-        # This is producing one logprob value for each dimension 
-        log_prob_marginals = tf.math.log(gaussian_marginals.prob(self.reshaped_alpha_samples)+ 1e-07)  
-        # According to the equation (see paper), log(SUM) = SUM(logs): 
-        log_prob_marginal = tf.math.reduce_sum(log_prob_marginals,axis = -1)    # to sum in the axis of n_dims        
-        return log_prob_marginal
+    def Marginal_pdf_logprob(self, y_true, y_pred):
+        """
+        Updated Log-Likelihood: Uses the built-in .log_prob() method of 
+        TruncatedNormal for numerical stability at high truncation thresholds.
+        """
+        gaussian_marginals = tfd.TruncatedNormal(
+            loc=self.reshaped_means[:, 0, :], 
+            scale=self.reshaped_scales[:, 0, :], 
+            low=self.lbound, 
+            high=1.0
+        )
+        
+        # Native log_prob is mathematically more stable than log(prob)
+        log_prob_marginals = gaussian_marginals.log_prob(self.reshaped_alpha_samples)
+        
+        # Clip to prevent extreme values from causing NaN during backprop
+        return tf.math.reduce_sum(tf.clip_by_value(log_prob_marginals, -20.0, 20.0), axis=-1)
+        
+    # def Marginal_pdf_logprob(self,y_true, y_pred):
+    #     '''
+    #     #This one is used for Gaussian marginal directly (known inverse CDF)
+    #     Here we calculate the log probability of the samples over the marginal distributions 
+    #     We have n_dims marginals to consider. 
+    #     The inputs are taken from the self, and include the marginal_samples, and the marginals parameters 
+    #     The output will be the log_probs with shape [batch_size, num_samples]
+    #     '''
+    #     # Taking into account that here we have only one gaussian, we can neglect the dimension of num_gaussians as it is simply 1. 
+    #     gaussian_marginals = tfd.TruncatedNormal(loc=self.reshaped_means[:,0,:], scale=self.reshaped_scales[:,0,:], low = self.lbound -0.0001, high=1.0001)        
+    #     # # This is producing one logprob value for each dimension 
+    #     log_prob_marginals = tf.math.log(gaussian_marginals.prob(self.reshaped_alpha_samples)+ 1e-07)  
+    #     # # According to the equation (see paper), log(SUM) = SUM(logs): 
+    #     log_prob_marginal = tf.math.reduce_sum(log_prob_marginals,axis = -1)    # to sum in the axis of n_dims        
+    #     return log_prob_marginal
     
     
     def Joint_copula_dens_term(self,y_true, y_pred):
@@ -281,34 +306,6 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
 
         return joint_copula_logprob
     
-    # def Copula_pdf_logprob(self, y_true, y_pred):
-    #     # Convert uniform samples to standard normal
-    #     normal_samples = tfd.Normal(loc=0.0, scale=1.0).quantile(self.reshaped_copula_samples)
-    #     mvn = tfd.MultivariateNormalTriL(loc=tf.zeros(self.n_dims), scale_tril=self.reshaped_LT_matrices)
-
-    #     log_prob_joint_normal = tf.math.log(mvn.prob(normal_samples) + 1e-07)
-    #     log_prob_marginals_standard = tf.reduce_sum(tf.math.log(tfd.Normal(0.0, 1.0).prob(normal_samples) + 1e-07), axis=-1)      
-        
-        # return log_prob_joint_normal - log_prob_marginals_standard
-    
-    # def Marginal_pdf_logprob(self, y_true, y_pred):
-    #     # Gaussian marginal logprob
-    #     gaussian_marginals = tfd.TruncatedNormal(loc=self.reshaped_means[:,0,:], scale=self.reshaped_scales[:,0,:], low=-0.0001, high=1.0001)
-    #     log_prob_marginals = tf.math.log(gaussian_marginals.prob(self.reshaped_alpha_samples) + 1e-07)  
-    #     log_prob_marginal = tf.math.reduce_sum(log_prob_marginals, axis=-1)
-    #     return log_prob_marginal
-    
-    # def Joint_copula_dens_term(self, y_true, y_pred):
-    #     Copula_density_term = self.Copula_pdf_logprob(y_true, y_pred)
-    #     Marginal_logprob_term = self.Marginal_pdf_logprob(y_true, y_pred)   
-        
-    #     # Calculate TOTAL Log Likelihood
-    #     joint_copula_logprob = tf.math.reduce_mean(Copula_density_term + Marginal_logprob_term, axis=None)
-        
-    #     # Maximize Likelihood = Minimize NLL
-    #     weighted_nll = -1.0 * tf.math.square(tf.cast(self.beta, dtype=tf.float32)) * joint_copula_logprob
-
-    #     return weighted_nll
     
     def ELBO_Copula_loss(self, y_true, y_pred):
         """

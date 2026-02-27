@@ -146,7 +146,7 @@ def physics_engine_step(K_batch, L_inv_tf, n_modes, num_dofs_total=12, fixed_dof
         return freqs_hz.numpy(), rot_modes.numpy(), vert_modes.numpy()
 
 # %% 3. QMC Grid & Physics Pass
-saving_path = os.path.join("MODULES", "POSTPROCESSING")
+saving_path = os.path.join("Output")
 if not os.path.exists(saving_path): os.makedirs(saving_path)
 
 qm = QuadratureMethod(gdim=5)
@@ -245,7 +245,7 @@ for pos in positions:
     w_filtered /= np.sum(w_filtered) # Re-normalize
 
     fig, axes = plt.subplots(n_elements, n_elements, figsize=(14, 14), facecolor='white')
-    labels = [f'$\\alpha_{{{k+1}}}$' for k in range(n_elements)]
+    labels = [f'$z{{{k+1}}}$' for k in range(n_elements)]
     
     cf = None # Variable to capture contour mapping for colorbar
 

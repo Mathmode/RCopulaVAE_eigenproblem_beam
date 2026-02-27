@@ -341,7 +341,7 @@ def plot_results_PDF_uncertainty(model, n_modes, beta, n_samples, pos, n_dofs, f
     w_filtered /= np.sum(w_filtered) # Re-normalize
 
     fig, axes = plt.subplots(n_elements, n_elements, figsize=(14, 14), facecolor='white')
-    labels = [f'$\\alpha_{{{k+1}}}$' for k in range(n_elements)]
+    labels = [f'$z{{{k+1}}}$' for k in range(n_elements)]
     
     for r in range(n_elements):
         for c in range(n_elements):
@@ -447,7 +447,6 @@ def plot_results_PDF_uncertainty(model, n_modes, beta, n_samples, pos, n_dofs, f
     plt.show()
     plt.close()
 
-
 def plot_physical_damage_profile(z_samples, posterior_weights, z_true, n_elements, pos, folder_path):
     """
     Visualizes the physical uncertainty of the damage estimates along a beam.
@@ -463,6 +462,8 @@ def plot_physical_damage_profile(z_samples, posterior_weights, z_true, n_element
         pos: Sample ID/index (used for saving the file).
         save_dir: Directory path where the plot will be saved.
     """
+    # Force default matplotlib style to override any grey seaborn backgrounds
+    plt.style.use('default')
     
     # 1. Calculate Expected Value and Standard Deviation (Weighted by Posterior)
     weights_norm = posterior_weights / np.sum(posterior_weights)
@@ -474,7 +475,7 @@ def plot_physical_damage_profile(z_samples, posterior_weights, z_true, n_element
     # 2. Setup Figure and Axes
     fig, (ax_bar, ax_beam) = plt.subplots(
         2, 1, 
-        figsize=(10, 7), 
+        figsize=(11, 7), 
         gridspec_kw={'height_ratios': [3.5, 1]}, 
         sharex=True,
         facecolor='white'
@@ -482,26 +483,28 @@ def plot_physical_damage_profile(z_samples, posterior_weights, z_true, n_element
     
     elements = np.arange(1, n_elements + 1)
     
-    # Setup Semantic Colormap (Reds: White=Healthy, Dark Red=Severe Damage)
-    cmap = cm.get_cmap('Reds')
+    # Setup Semantic Colormap (YlOrRd: Yellow=Healthy, Dark Red=Severe Damage)
+    cmap = cm.get_cmap('YlOrRd')
     norm = mcolors.Normalize(vmin=0, vmax=1)
     bar_colors = [cmap(norm(val)) for val in expected_z]
-    color_true = '#111111' # Sharp black/dark grey for the absolute truth
+    
+    color_true = '#111111'   # Sharp black for the absolute truth
+    color_error = '#555555'  # Soft charcoal for error bars
     
     # ==========================================
     # TOP PLOT: Bar Chart with Uncertainty
     # ==========================================
-    # Plot bars with edge colors for crispness
+    # Plot bars without edges for a seamless, modern gradient look
     bars = ax_bar.bar(
         elements, expected_z, yerr=std_z, 
-        color=bar_colors, edgecolor='#333333', linewidth=1.2,
-        label='Posterior Mean ($\mu$)', 
-        capsize=5, error_kw={'elinewidth': 2, 'capthick': 2, 'ecolor': '#333333'}
+        color=bar_colors, edgecolor='none',
+        label=' Average value', 
+        capsize=6, error_kw={'elinewidth': 2, 'capthick': 2, 'ecolor': color_error}
     )
     
-    # Dummy plot for the error bar legend entry
-    ax_bar.errorbar([], [], yerr=[], ecolor='#333333', capsize=5, elinewidth=2, 
-                    linestyle='None', label='$\pm 1\sigma$ Credible Interval')
+    # Dummy plot for the error bar legend entry (matches the charcoal color)
+    ax_bar.errorbar([], [], yerr=[], ecolor=color_error, capsize=6, elinewidth=2, 
+                    linestyle='None', label='$\pm 1\sigma$ interval')
 
     # Overlay True Damage state as a continuous step line
     if z_true is not None:
@@ -509,25 +512,30 @@ def plot_physical_damage_profile(z_samples, posterior_weights, z_true, n_element
         y_step = np.concatenate([z_true, [z_true[-1]]])
         ax_bar.step(
             x_step, y_step, where='post', 
-            color=color_true, label='True Damage State ($z^*$)', 
-            linestyle='--', linewidth=2.5, zorder=5
+            color=color_true, label='True value', 
+            linestyle='--', linewidth=2, zorder=5
         )
         ax_bar.plot(elements, z_true, marker='s', linestyle='none', color=color_true, markersize=6, zorder=6)
 
     # Top Plot Formatting
-    ax_bar.set_ylabel('Stiffness Reduction Factor ($z$)', fontsize=14, fontweight='medium')
+    ax_bar.set_ylabel('Stiffness reduction factor ($z$)', fontsize=15, fontweight='medium', labelpad=10)
     
     # Dynamically set Y-limit so error bars aren't cut off
     max_y = max(1.1, np.max(expected_z + std_z) * 1.15)
     ax_bar.set_ylim([0, max_y])
     
-    ax_bar.tick_params(axis='y', labelsize=12)
-    ax_bar.grid(axis='y', alpha=0.3, linestyle=':')
+    ax_bar.tick_params(axis='y', labelsize=13)
+    
+    # Extremely subtle grid lines for readability without clutter
+    ax_bar.grid(axis='y', alpha=0.4, linestyle=':')
     ax_bar.spines['top'].set_visible(False)
     ax_bar.spines['right'].set_visible(False)
+    ax_bar.spines['left'].set_linewidth(1.2)
+    ax_bar.spines['bottom'].set_linewidth(1.2)
     
-    # Move legend outside to keep data clear
-    ax_bar.legend(loc='upper center', bbox_to_anchor=(0.5, 1.25), ncol=3, frameon=False, fontsize=12)
+    # Elegant legend placement
+    ax_bar.legend(loc='upper center', bbox_to_anchor=(0.5, 1.22), ncol=3, frameon=True, 
+                  facecolor='white', edgecolor='#dddddd', fontsize=13, framealpha=1)
     
     # ==========================================
     # BOTTOM PLOT: Physical Beam Heatmap
@@ -542,41 +550,46 @@ def plot_physical_damage_profile(z_samples, posterior_weights, z_true, n_element
     # Clean up bottom axes
     ax_beam.set_yticks([])
     ax_beam.set_xticks(elements)
-    ax_beam.set_xticklabels([f'Element {k}' for k in elements], fontsize=13)
+    ax_beam.set_xticklabels([f'Element {k}' for k in elements], fontsize=14)
     ax_beam.tick_params(axis='x', length=0, pad=10)
     
     # Print Explicit Diagnosis inside the beam (Mean and Std)
     for j in range(n_elements):
         mu = expected_z[j]
         sig = std_z[j]
-        # Dynamically change text color for readability against dark/light backgrounds
-        text_color = 'white' if mu > 0.6 else 'black'
         
-        # Explicitly formats as: 0.16 \n (± 0.04)
+        # Dynamically change text color based on YlOrRd intensity for readability
+        # The colormap gets dark around 0.5-0.6
+        text_color = 'white' if mu > 0.55 else 'black'
+        
+        # Explicitly formats as: 0.13 \n (± 0.17)
         annotation_text = f"{mu:.2f}\n($\pm${sig:.2f})"
         
         ax_beam.text(
             j + 1, 0.5, annotation_text, 
             ha='center', va='center', color=text_color, 
-            fontweight='bold', fontsize=11, linespacing=1.5
+            fontweight='bold', fontsize=13, linespacing=1.6
         )
     
     # Draw physical beam boundaries
     for spine in ax_beam.spines.values():
-        spine.set_linewidth(1.5)
+        spine.set_linewidth(2.0)
         spine.set_color('black')
         
     # Draw simply-supported triangles at the ends (Visual grounding)
-    ax_beam.plot(0.5, 0, marker='^', markersize=16, color='black', clip_on=False, zorder=10)
-    ax_beam.plot(n_elements + 0.5, 0, marker='^', markersize=16, color='black', clip_on=False, zorder=10)
+    ax_beam.plot(0.5, 0, marker='^', markersize=20, color='black', clip_on=False, zorder=10)
+    ax_beam.plot(n_elements + 0.5, 0, marker='^', markersize=20, color='black', clip_on=False, zorder=10)
 
-    # Add Colorbar for reference
-    cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.2]) # [left, bottom, width, height]
+    # Add Minimalist Colorbar for reference
+    cbar_ax = fig.add_axes([0.91, 0.15, 0.015, 0.2]) # [left, bottom, width, height]
     cbar = fig.colorbar(im, cax=cbar_ax)
-    cbar.set_label('Severity', fontsize=11)
-    cbar.ax.tick_params(labelsize=10)
+    cbar.set_label('Severity', fontsize=13)
+    cbar.ax.tick_params(labelsize=11)
+    cbar.outline.set_linewidth(1.2)
 
-    plt.tight_layout(rect=[0, 0, 0.9, 1]) # Adjust right margin to fit colorbar
+    # Adjust layout to fit everything beautifully
+    plt.tight_layout(rect=[0, 0, 0.88, 1]) 
+    fig.subplots_adjust(hspace=0.1) # Close the gap between bars and beam
     
     # Save the plot
     save_dir = os.path.join(folder_path, "Physical_uncertainty_pred")
@@ -588,6 +601,125 @@ def plot_physical_damage_profile(z_samples, posterior_weights, z_true, n_element
         
     plt.show()
     plt.close(fig)
+        
+
+def plot_copula_posterior_insights(z_samples, posterior_weights, z_true, n_elements, pos, save_dir):
+    """
+    Visualizes the joint dependencies and true probabilistic nature of the Copula posterior.
+    Panel 1: Sample Trajectories (Spaghetti Plot) weighted by likelihood.
+    Panel 2: Spatial Correlation Matrix of the damage state.
+    """
+    plt.style.use('default')
+    
+    # 1. Statistical Calculations (Weighted by Posterior)
+    weights_norm = posterior_weights / np.sum(posterior_weights)
+    
+    # Weighted Covariance and Correlation Matrix
+    cov_matrix = np.cov(z_samples, aweights=weights_norm, rowvar=False)
+    std_z = np.sqrt(np.diag(cov_matrix))
+    corr_matrix = cov_matrix / np.outer(std_z, std_z)
+    
+    # 2. Setup Figure
+    fig, (ax_traj, ax_corr) = plt.subplots(
+        1, 2, 
+        figsize=(14, 6), 
+        gridspec_kw={'width_ratios': [1.5, 1]},
+        facecolor='white'
+    )
+    
+    elements = np.arange(1, n_elements + 1)
+    
+    # ==========================================
+    # LEFT PLOT: Sample Trajectories (Parallel Coordinates)
+    # ==========================================
+    # Sort samples so the highest likelihood samples are plotted last (on top)
+    idx_sorted = np.argsort(posterior_weights)
+    
+    # Take top 500 samples to prevent visual clutter, but show the distribution
+    n_plot = min(500, len(z_samples))
+    top_idx = idx_sorted[-n_plot:]
+    top_samples = z_samples[top_idx]
+    top_weights = weights_norm[top_idx]
+    
+    # Normalize alpha transparency based on posterior weights
+    alpha_min, alpha_max = 0.05, 0.8
+    if np.max(top_weights) > np.min(top_weights):
+        alphas = (top_weights - np.min(top_weights)) / (np.max(top_weights) - np.min(top_weights))
+        alphas = alpha_min + (alpha_max - alpha_min) * alphas
+    else:
+        alphas = np.full(n_plot, 0.2)
+
+    # Plot the trajectories
+    for i in range(n_plot):
+        ax_traj.plot(elements, top_samples[i], color='#4575b4', alpha=alphas[i], linewidth=1.5)
+        
+    # Dummy line for legend
+    ax_traj.plot([], [], color='#4575b4', alpha=0.6, linewidth=2, label='Posterior Samples (Opacity $\propto$ Likelihood)')
+
+    # Overlay True Damage state
+    if z_true is not None:
+        ax_traj.plot(elements, z_true, color='#d73027', marker='s', linestyle='--', 
+                     linewidth=2.5, markersize=8, label='True Damage State ($z^*$)', zorder=10)
+
+    # Formatting Left Plot
+    ax_traj.set_title("Joint Posterior Trajectories", fontsize=14, fontweight='bold', pad=15)
+    ax_traj.set_ylabel('Stiffness Reduction Factor ($z$)', fontsize=13)
+    ax_traj.set_xlabel('Beam Element', fontsize=13)
+    ax_traj.set_xticks(elements)
+    ax_traj.set_ylim([-0.05, 1.05])
+    ax_traj.grid(True, alpha=0.3, linestyle='--')
+    ax_traj.spines['top'].set_visible(False)
+    ax_traj.spines['right'].set_visible(False)
+    ax_traj.legend(loc='upper left', frameon=True, facecolor='white', edgecolor='#dddddd')
+
+    # ==========================================
+    # RIGHT PLOT: Weighted Correlation Matrix
+    # ==========================================
+    # RdBu colormap: Blue = Negative Correlation, Red = Positive Correlation
+    cmap = cm.get_cmap('RdBu_r') 
+    
+    im = ax_corr.imshow(corr_matrix, cmap=cmap, vmin=-1, vmax=1, aspect='equal')
+    
+    # Annotate the correlation values inside the heatmap
+    for i in range(n_elements):
+        for j in range(n_elements):
+            val = corr_matrix[i, j]
+            text_color = 'white' if abs(val) > 0.5 else 'black'
+            # Only show off-diagonal or format diagonal differently if desired
+            if i == j:
+                ax_corr.text(j, i, f"1.00", ha='center', va='center', color='white', fontweight='bold', fontsize=10)
+            else:
+                ax_corr.text(j, i, f"{val:+.2f}", ha='center', va='center', color=text_color, fontsize=10)
+
+    # Formatting Right Plot
+    ax_corr.set_title("Spatial Correlation Structure", fontsize=14, fontweight='bold', pad=15)
+    ax_corr.set_xticks(np.arange(n_elements))
+    ax_corr.set_yticks(np.arange(n_elements))
+    ax_corr.set_xticklabels([f'El {k}' for k in elements])
+    ax_corr.set_yticklabels([f'El {k}' for k in elements])
+    
+    # Add Colorbar for Correlation
+    cbar = fig.colorbar(im, ax=ax_corr, shrink=0.8, pad=0.05)
+    cbar.set_label('Pearson Correlation Coefficient ($r$)', fontsize=12)
+
+    # Adjust layout
+    plt.tight_layout()
+    fig.subplots_adjust(wspace=0.25)
+    
+    # Save the plot
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, f'Sample_{pos}_Copula_Insights.png')
+        plt.savefig(save_path, dpi=400, bbox_inches='tight', facecolor='white')
+        
+    plt.show()
+    plt.close(fig)
+
+
+
+
+
+
     
     
     
