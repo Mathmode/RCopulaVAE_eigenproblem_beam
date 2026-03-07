@@ -40,6 +40,11 @@ def build_correlation_matrices_from_cholesky(off_diag_elements, diag_elements, n
         diag_indices = tf.range(n_dims)
         diag_indices = tf.stack([diag_indices, diag_indices], axis=1)
         L = tf.tensor_scatter_nd_update(L, diag_indices, batch_diag_elements)
+        
+        #*******************+
+        # L = L +1e-07 
+        row_norms = tf.norm(L, axis=1, keepdims=True)
+        L = L / (row_norms + 1e-7)
 
         correlation_matrix = tf.matmul(L, L, transpose_b=True)
         jitter = 1e-6
@@ -57,17 +62,16 @@ def build_correlation_matrices_from_cholesky(off_diag_elements, diag_elements, n
 @tf.function(jit_compile=True)
 def gaussian_copula_samples_optimized(LT_matrices, n_dims, n_samples, lbound):
     """
-    Updated Sampling: Replaces rejection sampling with Inverse Transform Sampling.
-    Calculates the minimum percentile (u_min) based on lbound and samples 
-    directly within the valid probability window.
+    Inverse Transform Sampling: Guarantees samples are in the [lbound, 1] 
+    range without needing a while_loop.
     """
     batch_size = tf.shape(LT_matrices)[0]
     
-    # Calculate the percentile threshold for the lower bound
-    u_min = tfd.Normal(0.0, 1.0).cdf(tf.cast(lbound, tf.float32))
+    # Map physical lower bound to probability space [0, 1]
+    u_min = tfd.Normal(0.0, 1.0).cdf(tf.cast(lbound +0.0001, tf.float32))
     u_max = 0.999 
     
-    # Sample within the valid probability slice
+    # Generate random samples ONLY within the valid percentile window
     u_samples = tf.random.uniform(
         shape=[batch_size, n_samples, n_dims], 
         minval=u_min, 
@@ -75,17 +79,22 @@ def gaussian_copula_samples_optimized(LT_matrices, n_dims, n_samples, lbound):
         dtype=tf.float32
     )
     
-    # Project into Normal space and apply the Cholesky correlation matrix
+    # Convert to standard Normal Z-space
     z_samples = tfd.Normal(0.0, 1.0).quantile(u_samples)
+    
+    # Apply correlation (Cholesky matrix)
     copula_samples_z = tf.matmul(z_samples, LT_matrices, transpose_b=True)
     
-    # Final correlated copula samples in Uniform space
+    # Transform back to Uniform space for the Copula representation
     copula_samples_u = tfd.Normal(0.0, 1.0).cdf(copula_samples_z)
     
-    return copula_samples_u
+    return tf.clip_by_value(copula_samples_u, 1e-7, 1.0 - 1e-7)
+
 
 # @tf.function(jit_compile=True)  # Keep jit_compile=True for performance, but remove temporarily for debugging
-def gaussian_copula_samples(LT_matrices, n_dims, n_samples, lbound):
+def gaussian_copula_samples(LT_matrices, n_dims, n_samples,lbound):
+    
+    lb = 0 # the gaussian copula samples should be in  [0,1], i think lbound should only apply at the final samples (marginal samples)
     def draw_samples(LT_matrices_batch):
         # Process the entire batch of LT matrices at once
         mvn_model = tfd.MultivariateNormalTriL(loc=tf.zeros(n_dims), scale_tril=tf.eye(n_dims))
@@ -95,7 +104,7 @@ def gaussian_copula_samples(LT_matrices, n_dims, n_samples, lbound):
         return copula_samples  # [n_samples, batch_size, n_dims]
 
     def condition(samples):
-        valid_mask = tf.reduce_all((samples > lbound+ 0.001) & (samples < 0.99), axis=-1)
+        valid_mask = tf.reduce_all((samples > lb+ 0.00001) & (samples < 0.99), axis=-1)
         return tf.reduce_any(~valid_mask)  # Continue looping if *any* sample is invalid
 
     def body(samples):
@@ -103,7 +112,7 @@ def gaussian_copula_samples(LT_matrices, n_dims, n_samples, lbound):
       new_samples = draw_samples(LT_matrices)
 
       # Create a mask of which original samples are valid.  keepdims is important!
-      valid_mask = tf.reduce_all((samples > lbound + 0.001) & (samples < 0.99), axis=-1, keepdims=True)
+      valid_mask = tf.reduce_all((samples > lb + 0.00001) & (samples < 0.99), axis=-1, keepdims=True)
 
       # Use tf.where to combine:  If valid, keep old; otherwise, use new.
       updated_samples = tf.where(valid_mask, samples, new_samples)
@@ -135,7 +144,15 @@ def gaussian_marginal_samples(locs, scales, copula_samples, lbound):
         scales with shape (batch_size, num_gaussians =1, n_dims)
         copula_samples with shape (batch_size, num_samples, n_dims)
     """
-    marginal_samples = tfd.TruncatedNormal(loc=locs, scale=scales, low= lbound -0.001, high=1.000).quantile(copula_samples)
+    # safe_copula_samples = 1e-5 + (1.0 - 2e-5) * copula_samples
+    # marginal_samples = tfd.TruncatedNormal(loc=locs, scale=scales, low= lbound+0.0001, high=1.000).quantile(safe_copula_samples)
+    marginal_samples = tfd.TruncatedNormal(
+    loc=locs, 
+    scale=scales, 
+    low=lbound,    # Use exactly lbound
+    high=1.0).quantile(copula_samples)
+    
+    
     return marginal_samples
 
 

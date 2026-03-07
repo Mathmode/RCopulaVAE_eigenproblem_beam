@@ -45,12 +45,12 @@ def gaussian_copula(LT_matrix, n_dims, n_samples):
     return copula_samples, mvn_samples, mvn_model
 
 
-def gaussian_marginal_samples(locs, scales, copula_samples):
+def gaussian_marginal_samples(locs, scales, copula_samples, lbound):
     """
     Builds marginal samples given copula samples and Gaussian marginal parameters.
     Returns marginal_samples with shape (batch_size, num_samples, n_dims).
     """
-    marginal_samples = tfd.TruncatedNormal(loc=locs, scale=scales, low = 0.00005, high = 0.999).quantile(copula_samples)
+    marginal_samples = tfd.TruncatedNormal(loc=locs, scale=scales, low = lbound +0.0001, high = 0.999).quantile(copula_samples)
     # marginal_samples: (num_samples, n_dims)
     return marginal_samples
 
@@ -150,7 +150,7 @@ def physics_engine_step(K_batch, L_inv_tf, n_modes, free_dofs, n_dofs):
 from MODULES.COPULAS.GC_GMm_GPU_eigen_functions import assemble_global_Kmatrices
   
 def calculate_posterior_PDF_info(model, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
-                                 predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, folder_path):
+                                 predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq,  lbound, folder_path):
     
     """
     Generates uncertainty plots for a specific test sample 'pos'.
@@ -175,7 +175,7 @@ def calculate_posterior_PDF_info(model, n_modes, beta, n_samples, pos, n_dofs, f
     # 1. GENERATE SAMPLES
     L_inv_tf = tf.cast(L_inv, dtype=tf.float32)
     copula_samples, mvn_samples, mvn_model = gaussian_copula(LT_matrix, n_dims, n_samples) 
-    z_samples = gaussian_marginal_samples(locs, scales, copula_samples)
+    z_samples = gaussian_marginal_samples(locs, scales, copula_samples, lbound)
     z_samples = tf.cast(z_samples, dtype=tf.float32)
     z_samples = z_samples.numpy()
     
@@ -238,7 +238,7 @@ def calculate_posterior_PDF_info(model, n_modes, beta, n_samples, pos, n_dofs, f
     return z_true, z_samples, posterior_weights
 
 def plot_results_PDF_uncertainty(model, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
-                                 predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, folder_path):
+                                 predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, lbound, folder_path):
     """
     Generates uncertainty plots for a specific test sample 'pos'.
     """
@@ -261,7 +261,7 @@ def plot_results_PDF_uncertainty(model, n_modes, beta, n_samples, pos, n_dofs, f
     # 1. GENERATE SAMPLES
     L_inv_tf = tf.cast(L_inv, dtype=tf.float32)
     copula_samples, mvn_samples, mvn_model = gaussian_copula(LT_matrix, n_dims, n_samples) 
-    z_samples = gaussian_marginal_samples(locs, scales, copula_samples)
+    z_samples = gaussian_marginal_samples(locs, scales, copula_samples, lbound)
     z_samples = tf.cast(z_samples, dtype=tf.float32)
     z_samples = z_samples.numpy()
     
@@ -352,7 +352,7 @@ def plot_results_PDF_uncertainty(model, n_modes, beta, n_samples, pos, n_dofs, f
                     vals = x_filtered[:, r]
                     # Generate 1D KDE
                     kde1d = gaussian_kde(vals, weights=w_filtered)
-                    x_grid = np.linspace(0, 1, 100)
+                    x_grid = np.linspace(lbound, 1, 100)
                     y_grid = kde1d(x_grid)
                     
                     ax.fill_between(x_grid, y_grid, color='steelblue', alpha=0.4)
@@ -364,7 +364,7 @@ def plot_results_PDF_uncertainty(model, n_modes, beta, n_samples, pos, n_dofs, f
 
                     # Formatting
                     # ax.set_title(f"{labels[r]}\nTrue: {z_true[r]:.2f}", fontsize=10)
-                    ax.set_xlim(0, 1)
+                    ax.set_xlim(lbound, 1)
                     ax.set_yticks([]) # Remove density scale for cleaner look
                 except Exception as e:
                     ax.text(0.5, 0.5, "KDE Fail", ha='center')
@@ -380,7 +380,7 @@ def plot_results_PDF_uncertainty(model, n_modes, beta, n_samples, pos, n_dofs, f
                     
                     # Create grid for evaluation
                     # Use 40-50 for performance, higher for smoothness
-                    xi, yi = np.mgrid[0:1:50j, 0:1:50j]
+                    xi, yi = np.mgrid[lbound:1:50j, lbound:1:50j]
                     coords = np.vstack([xi.flatten(), yi.flatten()])
                     zi = kernel(coords).reshape(xi.shape)
                     
@@ -400,8 +400,8 @@ def plot_results_PDF_uncertainty(model, n_modes, beta, n_samples, pos, n_dofs, f
                 if c == 0: ax.set_ylabel(labels[r], fontsize=18)
                 if r == n_elements - 1: ax.set_xlabel(labels[c], fontsize=18)
                 
-                ax.set_xlim(0, 1)
-                ax.set_ylim(0, 1)
+                ax.set_xlim(lbound, 1)
+                ax.set_ylim(lbound, 1)
                 ax.grid(True, linestyle=':', alpha=0.3)
                 
             else: # Upper Triangle: Empty or hidden
@@ -446,23 +446,20 @@ def plot_results_PDF_uncertainty(model, n_modes, beta, n_samples, pos, n_dofs, f
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.show()
     plt.close()
+    
+    
+    
+    
+    
 
 def plot_physical_damage_profile(z_samples, posterior_weights, z_true, n_elements, pos, folder_path):
     """
     Visualizes the physical uncertainty of the damage estimates along a beam.
-    Generates a high-quality, journal-ready two-panel plot: 
-      1. A bar chart with 1-sigma credible intervals mapped to damage severity.
-      2. A physical 1D heatmap representing the beam's stiffness reduction and uncertainty.
-    
-    Args:
-        z_samples: (n_samples, n_elements) array of sampled stiffness reduction factors.
-        posterior_weights: (n_samples,) array of calculated likelihood/posterior weights.
-        z_true: (n_elements,) array of ground truth stiffness reduction factors.
-        n_elements: Number of elements in the beam.
-        pos: Sample ID/index (used for saving the file).
-        save_dir: Directory path where the plot will be saved.
+    Corrected Logic: 
+        - z = 1.0 (Yellow/Light) -> Healthy
+        - z = 0.5 (Dark Red)     -> Severe Damage
     """
-    # Force default matplotlib style to override any grey seaborn backgrounds
+    # Force default matplotlib style
     plt.style.use('default')
     
     # 1. Calculate Expected Value and Standard Deviation (Weighted by Posterior)
@@ -483,30 +480,35 @@ def plot_physical_damage_profile(z_samples, posterior_weights, z_true, n_element
     
     elements = np.arange(1, n_elements + 1)
     
-    # Setup Semantic Colormap (YlOrRd: Yellow=Healthy, Dark Red=Severe Damage)
-    cmap = cm.get_cmap('YlOrRd')
-    norm = mcolors.Normalize(vmin=0, vmax=1)
+    # ==========================================
+    # COLOR LOGIC ADJUSTMENT
+    # ==========================================
+    # Using 'YlOrRd_r' (reversed) so 0 is Red and 1 is Yellow.
+    # Or keep 'YlOrRd' but use a normalization that maps 0->1 and 1->0.
+    # Best approach: Use YlOrRd_r so high values (1.0) are Yellow and low (0.0) are Red.
+    cmap = cm.get_cmap('YlOrRd_r') 
+    norm = mcolors.Normalize(vmin=0.5, vmax=1)
     bar_colors = [cmap(norm(val)) for val in expected_z]
     
-    color_true = '#111111'   # Sharp black for the absolute truth
-    color_error = '#555555'  # Soft charcoal for error bars
+    color_true = '#111111'   # Sharp black for truth
+    # color_error = '#555555'  # Soft charcoal for error bars
+
+    color_error = 'blue'  # Soft charcoal for error bars
     
     # ==========================================
     # TOP PLOT: Bar Chart with Uncertainty
     # ==========================================
-    # Plot bars without edges for a seamless, modern gradient look
-    bars = ax_bar.bar(
+    ax_bar.bar(
         elements, expected_z, yerr=std_z, 
         color=bar_colors, edgecolor='none',
-        label=' Average value', 
+        label='Average value', 
         capsize=6, error_kw={'elinewidth': 2, 'capthick': 2, 'ecolor': color_error}
     )
     
-    # Dummy plot for the error bar legend entry (matches the charcoal color)
+    # Dummy plot for legend
     ax_bar.errorbar([], [], yerr=[], ecolor=color_error, capsize=6, elinewidth=2, 
                     linestyle='None', label='$\pm 1\sigma$ interval')
 
-    # Overlay True Damage state as a continuous step line
     if z_true is not None:
         x_step = np.arange(0.5, n_elements + 1.5, 1)
         y_step = np.concatenate([z_true, [z_true[-1]]])
@@ -517,25 +519,17 @@ def plot_physical_damage_profile(z_samples, posterior_weights, z_true, n_element
         )
         ax_bar.plot(elements, z_true, marker='s', linestyle='none', color=color_true, markersize=6, zorder=6)
 
-    # Top Plot Formatting
-    ax_bar.set_ylabel('Stiffness reduction factor ($z$)', fontsize=15, fontweight='medium', labelpad=10)
-    
-    # Dynamically set Y-limit so error bars aren't cut off
-    max_y = max(1.1, np.max(expected_z + std_z) * 1.15)
-    ax_bar.set_ylim([0, max_y])
-    
-    ax_bar.tick_params(axis='y', labelsize=13)
-    
-    # Extremely subtle grid lines for readability without clutter
+    # Formatting
+    ax_bar.set_ylabel('Stiffness reduction factor ($z$)', fontsize=18, fontweight='medium', labelpad=10)
+    ax_bar.set_ylim([0.5, 1.0]) # Reduction factor usually doesn't exceed 1.0 significantly
+    ax_bar.tick_params(axis='y', labelsize=15)
     ax_bar.grid(axis='y', alpha=0.4, linestyle=':')
-    ax_bar.spines['top'].set_visible(False)
-    ax_bar.spines['right'].set_visible(False)
-    ax_bar.spines['left'].set_linewidth(1.2)
-    ax_bar.spines['bottom'].set_linewidth(1.2)
     
-    # Elegant legend placement
+    for spine in ['top', 'right']:
+        ax_bar.spines[spine].set_visible(False)
+    
     ax_bar.legend(loc='upper center', bbox_to_anchor=(0.5, 1.22), ncol=3, frameon=True, 
-                  facecolor='white', edgecolor='#dddddd', fontsize=13, framealpha=1)
+                  facecolor='white', edgecolor='#dddddd', fontsize=15, framealpha=1)
     
     # ==========================================
     # BOTTOM PLOT: Physical Beam Heatmap
@@ -547,60 +541,55 @@ def plot_physical_damage_profile(z_samples, posterior_weights, z_true, n_element
         extent=[0.5, n_elements + 0.5, 0, 1]
     )
     
-    # Clean up bottom axes
     ax_beam.set_yticks([])
     ax_beam.set_xticks(elements)
-    ax_beam.set_xticklabels([f'Element {k}' for k in elements], fontsize=14)
+    ax_beam.set_xticklabels([f'El {k}' for k in elements], fontsize=15)
     ax_beam.tick_params(axis='x', length=0, pad=10)
     
-    # Print Explicit Diagnosis inside the beam (Mean and Std)
     for j in range(n_elements):
         mu = expected_z[j]
         sig = std_z[j]
         
-        # Dynamically change text color based on YlOrRd intensity for readability
-        # The colormap gets dark around 0.5-0.6
-        text_color = 'white' if mu > 0.55 else 'black'
+        # In YlOrRd_r, low values (near 0) are Dark Red.
+        # So if mu < 0.45, use white text for contrast against dark red.
+        text_color = 'white' if mu < 0.45 else 'black'
         
-        # Explicitly formats as: 0.13 \n (± 0.17)
         annotation_text = f"{mu:.2f}\n($\pm${sig:.2f})"
-        
         ax_beam.text(
             j + 1, 0.5, annotation_text, 
             ha='center', va='center', color=text_color, 
-            fontweight='bold', fontsize=13, linespacing=1.6
+            fontweight='bold', fontsize=15, linespacing=1.4
         )
     
-    # Draw physical beam boundaries
+    # Physical beam boundaries
     for spine in ax_beam.spines.values():
         spine.set_linewidth(2.0)
         spine.set_color('black')
         
-    # Draw simply-supported triangles at the ends (Visual grounding)
+    # Support triangles
     ax_beam.plot(0.5, 0, marker='^', markersize=20, color='black', clip_on=False, zorder=10)
     ax_beam.plot(n_elements + 0.5, 0, marker='^', markersize=20, color='black', clip_on=False, zorder=10)
 
-    # Add Minimalist Colorbar for reference
-    cbar_ax = fig.add_axes([0.91, 0.15, 0.015, 0.2]) # [left, bottom, width, height]
+    # Colorbar Adjustment
+    cbar_ax = fig.add_axes([0.92, 0.05, 0.015, 0.2])
     cbar = fig.colorbar(im, cax=cbar_ax)
-    cbar.set_label('Severity', fontsize=13)
-    cbar.ax.tick_params(labelsize=11)
-    cbar.outline.set_linewidth(1.2)
+    cbar.set_label('reduction factor', fontsize=15)
+    # Adding tick labels to clarify severity
+    cbar.set_ticks([0.5, 1])
+    cbar.set_ticklabels(['z = 0.5', 'z = 1.0  (Healthy)'])
+    cbar.ax.tick_params(labelsize=15)
 
-    # Adjust layout to fit everything beautifully
-    plt.tight_layout(rect=[0, 0, 0.88, 1]) 
-    fig.subplots_adjust(hspace=0.1) # Close the gap between bars and beam
+    plt.tight_layout(rect=[0, 0, 0.9, 1]) 
+    fig.subplots_adjust(hspace=0.05) 
     
-    # Save the plot
+    # Save logic
     save_dir = os.path.join(folder_path, "Physical_uncertainty_pred")
     if not os.path.exists(save_dir): 
         os.makedirs(save_dir)
     
     save_path = os.path.join(save_dir, f'Sample_{pos}_Diagnosis_Profile.png')
     plt.savefig(save_path, dpi=400, bbox_inches='tight')
-        
     plt.show()
-    plt.close(fig)
         
 
 def plot_copula_posterior_insights(z_samples, posterior_weights, z_true, n_elements, pos, save_dir):

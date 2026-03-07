@@ -178,7 +178,7 @@ if __name__ == "__main__":
     # Calculate nodes for verification
     n_nodes = n_elements + 1
 
-    folder_name = f"10D_26Feb2026_MildDam05_Randomdata{n_elements}elements"
+    folder_name = f"28Feb2026_MildDam50_Randomdata{n_elements}elements"
     data_file_path = os.path.join("Data", folder_name)
 
     if not os.path.exists(data_file_path):

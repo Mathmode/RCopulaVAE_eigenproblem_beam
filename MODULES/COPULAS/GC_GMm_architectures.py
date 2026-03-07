@@ -49,17 +49,8 @@ def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians, lbound):
                         kernel_initializer='zeros', 
                         bias_initializer='zeros', 
                         name='means_raw')(lay3)
-    
     # Scale means to be strictly within [lbound, 1]
-    # This prevents the TruncatedNormal loc from being outside the truncation bounds
-    means = lbound + (0.999 - lbound) * means_raw 
-    # # Using Sigmoid + scaling to keep means strictly within (0, 1) range
-    # means = K.layers.Dense(n_dims*num_gaussians, activation='sigmoid',
-    #                        kernel_initializer='zeros', 
-    #                        bias_initializer=tf.keras.initializers.RandomUniform(minval=-4.0, maxval=4.0), 
-    #                        name='means')(lay3)
-    # means = 1e-6 + 0.999 * means 
-
+    means =  (lbound + 0.001) + (0.998 - lbound) * means_raw 
 
     # SIGMAS
     # Sigmoid + scaling ensures positive, bounded standard deviations
@@ -104,9 +95,9 @@ class Copula_pdf_layer(tf.keras.layers.Layer):
         tf.debugging.assert_all_finite(offdiag_elems, "offdiag contains NaN or Inf")
                
         LT_matrices  = build_correlation_matrices_from_cholesky(offdiag_elems, diag_elems, self.n_dims)
-        # copula_samples = gaussian_copula_samples(LT_matrices, self.n_dims, self.num_samples, self.lbound)
-        copula_samples = gaussian_copula_samples_optimized(LT_matrices, self.n_dims, self.num_samples, self.lbound)
-        
+        copula_samples = gaussian_copula_samples(LT_matrices, self.n_dims, self.num_samples, self.lbound)
+        # copula_samples = gaussian_copula_samples_optimized(LT_matrices, self.n_dims, self.num_samples, self.lbound)
+
         
        # Build samples assuming single Gaussian marginals
         marginal_samples = gaussian_marginal_samples(means, scales, copula_samples, self.lbound)

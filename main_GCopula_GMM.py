@@ -45,7 +45,9 @@ def main():
     # --- 2. DATA LOADING ---
     # Path Configuration
     # data_folder = "11Feb2026_Corrected_Randomdata5elements"
-    data_folder = "26Feb2026_MildDam05_Randomdata5elements"
+    # data_folder = "28Feb2026_MildDam50_Randomdata5elements"
+    data_folder = "01Mar2026_Noisy_E5_level25"
+
 
     data_path = os.path.join("Data", data_folder)
     
@@ -54,7 +56,7 @@ def main():
     # Total DOFs: 2 per node, (N+1) nodes. 
     # For 5 elements: 6 nodes * 2 = 12 DOFs.
     n_dofs = 2 * (n_elements + 1) 
-    lbound = 0.5 # minimum reduction factor to truncate the marginals
+    lbound = 0.45 # minimum reduction factor to truncate the marginals
     
     # Boundary Conditions: Simply Supported (Pin-Pin)
     # Fix Vertical displacement at first node (Index 0) and last node (Index 2*N)
@@ -70,6 +72,10 @@ def main():
      Freqs_true_test, Rotmodes_true_test, Vertmodes_true_test, alpha_factors_true_test, 
      mean_f, std_f) = load_data(data_path, batch_size)
     
+    # Freqs_true_train, Rotmodes_true_train, Vertmodes_true_train, alpha_factors_true_train = Freqs_true_test, Rotmodes_true_test, Vertmodes_true_test, alpha_factors_true_test
+    # Freqs_true_val, Rotmodes_true_val, Vertmodes_true_val, alpha_factors_true_val = Freqs_true_test, Rotmodes_true_test, Vertmodes_true_test, alpha_factors_true_test
+    
+    
     # Load Physical Matrices (Mass, Stiffness, Cholesky Inverse)
     Mfree, Ke_matrices, L_inv = load_known_matrices(data_path, n_elements)
 
@@ -82,7 +88,7 @@ def main():
     n_modes = Freqs_true_train.shape[1]
     
     # Training Hyperparameters
-    n_epochs = 30000
+    n_epochs = 100000
     base_lr = 1e-5
     epsi = 0.0 # Regularizer weight
     
@@ -90,7 +96,7 @@ def main():
     num_gaussians = 1
     n_dims = alpha_factors_true_train.shape[1]
     num_samples = 1 # Samples for training (Monte Carlo integration in loss)
-    beta = 0.25 # Weight for the Joint Copula Loss term
+    beta = 0.4 # Weight for the Joint Copula Loss term
 
     print(f"Initializing Model with Total DOFs: {n_dofs}, Fixed Indices: {fixed_dofs_indices}")
     # Instantiate Model
@@ -119,7 +125,7 @@ def main():
     run_eagerly = False # Set True only for debugging
     
     # Output Directory
-    filename = f"Prueba_{lbound}lbound_27Feb_Bayesian_MACloss_Beta{beta}_Samples{num_samples}_LR{base_lr}_Epochs{n_epochs}"
+    filename = f"07Mar_Nosiy2.5Mild50_{lbound}lbound_Bayesian_MACloss_Beta{beta}_Samples{num_samples}_LR{base_lr}_Epochs{n_epochs}"
     folder_path = os.path.join('Output', "Gaussian_Copula", filename)
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
@@ -140,20 +146,20 @@ def main():
         run_eagerly=run_eagerly
     )
 
-    # --- 5. TRAINING ---
-    # Checkpoints
-    checkpoint_path = os.path.join(folder_path, "checkpoints", "cp-{epoch:04d}.ckpt")
-    checkpoint_dir = os.path.dirname(checkpoint_path)
-    if not os.path.exists(checkpoint_dir):
-        os.makedirs(checkpoint_dir)
+    # # --- 5. TRAINING ---
+    # # Checkpoints
+    # checkpoint_path = os.path.join(folder_path, "checkpoints", "cp-{epoch:04d}.ckpt")
+    # checkpoint_dir = os.path.dirname(checkpoint_path)
+    # if not os.path.exists(checkpoint_dir):
+    #     os.makedirs(checkpoint_dir)
         
-    cp_callback = tf.keras.callbacks.ModelCheckpoint(
-        filepath=checkpoint_path, 
-        verbose=0, 
-        save_weights_only=True,
-        save_freq='epoch',
-        period=100 # Save every 100 epochs
-    )
+    # cp_callback = tf.keras.callbacks.ModelCheckpoint(
+    #     filepath=checkpoint_path, 
+    #     verbose=0, 
+    #     save_weights_only=True,
+    #     save_freq='epoch',
+    #     period=100 # Save every 100 epochs
+    # )
     
     # TensorBoard (Optional, useful for monitoring)
     # tb_callback = tf.keras.callbacks.TensorBoard(log_dir=folder_path)
@@ -169,7 +175,7 @@ def main():
             [Freqs_true_val, Rotmodes_true_val, Vertmodes_true_val, alpha_factors_true_val], 
             alpha_factors_true_val
         ),
-        callbacks=[cp_callback]
+        callbacks=[]
     )
     
     # --- 6. SAVING RESULTS ---
