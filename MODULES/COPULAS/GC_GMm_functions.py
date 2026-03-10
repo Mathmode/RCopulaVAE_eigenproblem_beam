@@ -11,7 +11,7 @@ tfd = tfp.distributions
 import numpy as np 
 
 
-@tf.function(jit_compile = True)
+# @tf.function(jit_compile = True)
 def build_correlation_matrices_from_cholesky(off_diag_elements, diag_elements, n_dims):
     """Batched version using tf.vectorized_map."""
     def build_single_correlation_matrix(batch_off_diag_elements, batch_diag_elements):

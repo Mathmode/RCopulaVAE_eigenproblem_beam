@@ -147,7 +147,6 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         # 2. SAMPLING
         inputs_to_sampling = [self.means, self.scales, self.weight_vals, self.offdiag_elems, self.diag_elems]
         self.marginal_samples_z, self.copula_samples_u, self.LT_matrices = self.Copula_sampling_layer(inputs_to_sampling)
-        
         # These are the estimated Alphas (Stiffness Factors)
         self.reshaped_alpha_samples = tf.reshape(self.marginal_samples_z, (-1, self.n_dims)) 
         self.reshaped_copula_samples  = tf.reshape(self.copula_samples_u, (-1, self.n_dims))
@@ -175,6 +174,7 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         self.pred_freqs, self.pred_rotmodes, self.pred_vertmodes = self.Eigen_solver(Kfree)
         self.pred_freqs = tf.abs(self.pred_freqs)         
         # RETURN ALL DESIRED OUTPUTS
+        # return [self.reshaped_alpha_samples, self.means, self.scales, self.offdiag_elems, self.diag_elems]       
         return self.reshaped_alpha_samples
 
     # --- LOSS FUNCTIONS ---

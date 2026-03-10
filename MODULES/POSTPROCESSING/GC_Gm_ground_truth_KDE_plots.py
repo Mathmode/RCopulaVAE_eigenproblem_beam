@@ -57,7 +57,7 @@ Mfree, Ke_matrices, L_inv = load_known_matrices(data_path, n_elements)
 L_inv_tf = tf.cast(L_inv, dtype=tf.float32)
 
 # Scaling/noise parameters
-beta = 0.25
+beta = 0.29
 inv_gamma_val = 1.0 / (beta**2)
 lbound = 0.45  # Note: ensure this matches the paper's damage bounds bounds
 
@@ -161,7 +161,7 @@ def physics_engine_step(K_batch, L_inv_tf, n_modes, free_dofs, n_dofs):
     
 
 # %% 3. QMC Grid & Physics Pass
-saving_path = os.path.join("Output", "Ground_truth_plots", "Noisy_GT_plots", "Beta025")
+saving_path = os.path.join("Output", "Ground_truth_plots", "Noisy_GT_plots", "Beta029")
 if not os.path.exists(saving_path): os.makedirs(saving_path)
 
 qm = QuadratureMethod(gdim=5)
@@ -198,14 +198,13 @@ vert_pred = np.concatenate(all_vert, axis=0) # (N_qmc, 5, 4)
 # positions = [0, 1, 7,  9, 11, 17, 25, 34, 45, 100, 138, 219, 234, 343, 456, 555, 612, 690, 761]
 # positions  = [2,20,21,41,43,48,50,63, 64, 65, 77, 78, 91,92,98,99,102,560,576]
 # positions = [300,301,302,303,304,305,310,311,312,313,314,315,321,322,323]
-# positions = [0,1,48,63,77,219,300,313,612,1000]
-positions  = [1,17,77,78,219,313,315, 63, 246,383 ,455,459, 1000,1182,1396,1489]
+positions  = [1,17,25,41,43,48,77,78,219,313,315, 63, 246,383 ,455,459, 1000,1182,1396,1489]
 # positions = [ 815,  723, 1318, 1077, 1228, 1396,  664, 1679,  689,  279, 1257,
 #        1178,   30, 1707, 1182, 1772, 1398,  442,  120, 1500, 1349, 1360,
 #         969,  383,  246,  510, 1455, 1586, 1776, 1787, 1100,  293, 1530,
 #        1219,  743, 1163,  640,  745,  336,    3, 1282, 1299,  908,  459,
 #         371, 1643, 1489, 1038, 1267,  455]
-# positions = [219]
+positions = [77]
 for pos in positions:
     # 1. Frequency Loss
     obs_f_scaled = Freqs_true_test[pos]
@@ -242,7 +241,7 @@ for pos in positions:
     posterior_pdf = likelihood / np.mean(likelihood)
     
     
-    quantile_threshold  = 0.95
+    quantile_threshold  = 0.85
     
     alpha_true = alpha_factors_true_test[pos, :] if alpha_factors_true_test is not None else None
     
@@ -265,107 +264,155 @@ for pos in positions:
     w_filtered = posterior_pdf[mask]
     w_filtered /= np.sum(w_filtered) 
     
-    # --- 2. Standardized Grid Setup ---
-    # We use fixed limits [lbound, 1.0] to ensure all subplots have identical dimensions
-    # and match the reference figure scale perfectly.
-    fixed_min = lbound
-    fixed_max = 1.0
     
     fig, axes = plt.subplots(n_elements, n_elements, figsize=(14, 14), facecolor='white')
     labels = [f'$z_{{{k+1}}}$' for k in range(n_elements)]
-    cf = None  
-    
+    cf = None
+
     for r in range(n_elements):
         for c in range(n_elements):
             ax = axes[r, c]
-            
-            if r == c:  # Diagonal: 1D Marginal Distribution
-                try:
-                    vals = x_filtered[:, r]
-                    kde1d = gaussian_kde(vals, weights=w_filtered)
-                    x_grid = np.linspace(fixed_min, fixed_max, 200)
-                    y_grid = kde1d(x_grid)
-                    
-                    ax.fill_between(x_grid, y_grid, color='steelblue', alpha=0.4)
-                    ax.plot(x_grid, y_grid, color='steelblue', lw=2)
-                    
-                    # Centered Label
-                    ax.text(0.5, 0.3, labels[r], fontsize=22, ha='center', va='center', 
-                            fontweight='bold', transform=ax.transAxes)
-                    
-                    ax.set_xlim(fixed_min, fixed_max)
-                    ax.set_yticks([]) 
-                except Exception:
-                    ax.text(0.5, 0.5, "KDE Fail", ha='center')
-            
-            elif r > c:  # Lower Triangle: 2D Joint Distribution
-                x_vals = x_filtered[:, c]
-                y_vals = x_filtered[:, r]
-                
-                try:
-                    kde_coords = np.vstack([x_vals, y_vals])
-                    kernel = gaussian_kde(kde_coords, weights=w_filtered)
-                    
-                    # Use fixed grid ranges
-                    xi, yi = np.mgrid[fixed_min:fixed_max:60j, fixed_min:fixed_max:60j]
-                    coords = np.vstack([xi.flatten(), yi.flatten()])
-                    zi = kernel(coords).reshape(xi.shape)
-                    
-                    cf = ax.contourf(xi, yi, zi, levels=20, cmap='viridis')
-                    
-                    if alpha_true is not None:
-                        ax.plot(alpha_true[c], alpha_true[r], color='red', marker='*',
-                                markersize=14, markeredgecolor='white', label='Truth')
-                except Exception:
-                    ax.scatter(x_vals, y_vals, c=w_filtered, s=2, cmap='viridis', alpha=0.3)
-                    if alpha_true is not None:
-                        ax.plot(alpha_true[c], alpha_true[r], 'r*', markersize=18, markeredgecolor='white')
-                
-                ax.set_xlim(fixed_min, fixed_max)
-                ax.set_ylim(fixed_min, fixed_max)
-                ax.grid(True, linestyle=':', alpha=0.3)
-            
-            else:  # Upper Triangle
+            if r == c:
+                vals = x_filtered[:, r]
+                kde1d = gaussian_kde(vals, weights=w_filtered)
+                x_grid = np.linspace(lbound, 1.0, 200)
+                y_grid = kde1d(x_grid)
+                ax.fill_between(x_grid, y_grid, color='steelblue', alpha=0.4)
+                ax.plot(x_grid, y_grid, color='steelblue', lw=2)
+                ax.text(0.5, 0.3, labels[r], fontsize=22, ha='center', va='center', fontweight='bold', transform=ax.transAxes)
+                ax.set_xlim(lbound, 1.0); ax.set_yticks([])
+            elif r > c:
+                xi, yi = np.mgrid[lbound:1.0:60j, lbound:1.0:60j]
+                kernel = gaussian_kde(np.vstack([x_filtered[:, c], x_filtered[:, r]]), weights=w_filtered)
+                zi = kernel(np.vstack([xi.flatten(), yi.flatten()])).reshape(xi.shape)
+                cf = ax.contourf(xi, yi, zi, levels=20, cmap='viridis')
+                ax.plot(alpha_true[c], alpha_true[r], 'r*', markersize=14, markeredgecolor='white', label='Truth')
+                ax.set_xlim(lbound, 1.0); ax.set_ylim(lbound, 1.0)
+            else:
                 ax.axis('off')
-            
-            # --- 3. Axis Formatting ---
+
             if r >= c:
                 ax.tick_params(labelsize=18)
-                
-                # Y-axis labels: Left column
-                if c == 0 and r != 0:
-                    ax.set_ylabel(labels[r], fontsize=18)
-                else:
-                    ax.tick_params(labelleft=False)
-                
-                # X-axis labels: Bottom row
-                if r == n_elements - 1:
-                    ax.set_xlabel(labels[c], fontsize=18)
-                else:
-                    ax.tick_params(labelbottom=False)
+                if c == 0 and r != 0: ax.set_ylabel(labels[r], fontsize=18)
+                else: ax.tick_params(labelleft=False)
+                if r == n_elements - 1: ax.set_xlabel(labels[c], fontsize=18)
+                else: ax.tick_params(labelbottom=False)
 
-    # Global Colorbar - Using constrained layout principles to maintain plot sizes
     if cf is not None:
         cbar = fig.colorbar(cf, ax=axes.ravel().tolist(), shrink=0.85, pad=0.06, anchor=(0.6, 1.3))
-        cbar.set_label('Posterior density', fontsize=18)
-    
-    # Global Legend
-    if alpha_true is not None:
-        import matplotlib.lines as mlines
-        gt_marker = mlines.Line2D([], [], color='red', marker='*', linestyle='None',
-                                  markersize=18, markeredgecolor='white', label='Ground truth')
-        fig.legend(handles=[gt_marker], loc='upper right', bbox_to_anchor=(0.82, 0.93),
-                   fontsize=18, frameon=True, facecolor='white', edgecolor='silver', shadow=True)
-    
-    # Strict layout control to ensure 1:1 aspect and matching dimensions
+        cbar.set_label('Posterior density (true)', fontsize=18)
+        cbar.ax.tick_params(labelsize=18)
+    import matplotlib.lines as mlines
+    gt_marker = mlines.Line2D([], [], color='red', marker='*', linestyle='None', markersize=18, markeredgecolor='white', label='Ground truth')
+    fig.legend(handles=[gt_marker], loc='upper right', bbox_to_anchor=(0.82, 0.93), fontsize=18, frameon=True, shadow=True)
+
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    
-    if not os.path.exists(saving_path):
-        os.makedirs(saving_path)
-    save_path = os.path.join(saving_path, f'PRUEBA_GT{pos}_JointPosterior_Matched_beta{beta}.png')
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    save_path = os.path.join(saving_path, f'GT{pos}_Posterior_beta{beta}.png')
+    plt.savefig(save_path, dpi=150)
     plt.show()
     plt.close()
+    
+    # # --- 2. Standardized Grid Setup ---
+    # # We use fixed limits [lbound, 1.0] to ensure all subplots have identical dimensions
+    # # and match the reference figure scale perfectly.
+    # fixed_min = lbound
+    # fixed_max = 1.0
+    
+    # fig, axes = plt.subplots(n_elements, n_elements, figsize=(14, 14), facecolor='white')
+    # labels = [f'$z_{{{k+1}}}$' for k in range(n_elements)]
+    # cf = None  
+    
+    # for r in range(n_elements):
+    #     for c in range(n_elements):
+    #         ax = axes[r, c]
+            
+    #         if r == c:  # Diagonal: 1D Marginal Distribution
+    #             try:
+    #                 vals = x_filtered[:, r]
+    #                 kde1d = gaussian_kde(vals, weights=w_filtered)
+    #                 x_grid = np.linspace(fixed_min, fixed_max, 200)
+    #                 y_grid = kde1d(x_grid)
+                    
+    #                 ax.fill_between(x_grid, y_grid, color='steelblue', alpha=0.4)
+    #                 ax.plot(x_grid, y_grid, color='steelblue', lw=2)
+                    
+    #                 # Centered Label
+    #                 ax.text(0.5, 0.3, labels[r], fontsize=22, ha='center', va='center', 
+    #                         fontweight='bold', transform=ax.transAxes)
+                    
+    #                 ax.set_xlim(fixed_min, fixed_max)
+    #                 ax.set_yticks([]) 
+    #             except Exception:
+    #                 ax.text(0.5, 0.5, "KDE Fail", ha='center')
+            
+    #         elif r > c:  # Lower Triangle: 2D Joint Distribution
+    #             x_vals = x_filtered[:, c]
+    #             y_vals = x_filtered[:, r]
+                
+    #             try:
+    #                 kde_coords = np.vstack([x_vals, y_vals])
+    #                 kernel = gaussian_kde(kde_coords, weights=w_filtered)
+                    
+    #                 # Use fixed grid ranges
+    #                 xi, yi = np.mgrid[fixed_min:fixed_max:60j, fixed_min:fixed_max:60j]
+    #                 coords = np.vstack([xi.flatten(), yi.flatten()])
+    #                 zi = kernel(coords).reshape(xi.shape)
+                    
+    #                 cf = ax.contourf(xi, yi, zi, levels=20, cmap='viridis')
+                    
+    #                 if alpha_true is not None:
+    #                     ax.plot(alpha_true[c], alpha_true[r], color='red', marker='*',
+    #                             markersize=14, markeredgecolor='white', label='Truth')
+    #             except Exception:
+    #                 ax.scatter(x_vals, y_vals, c=w_filtered, s=2, cmap='viridis', alpha=0.3)
+    #                 if alpha_true is not None:
+    #                     ax.plot(alpha_true[c], alpha_true[r], 'r*', markersize=18, markeredgecolor='white')
+                
+    #             ax.set_xlim(fixed_min, fixed_max)
+    #             ax.set_ylim(fixed_min, fixed_max)
+    #             ax.grid(True, linestyle=':', alpha=0.3)
+            
+    #         else:  # Upper Triangle
+    #             ax.axis('off')
+            
+    #         # --- 3. Axis Formatting ---
+    #         if r >= c:
+    #             ax.tick_params(labelsize=18)
+                
+    #             # Y-axis labels: Left column
+    #             if c == 0 and r != 0:
+    #                 ax.set_ylabel(labels[r], fontsize=18)
+    #             else:
+    #                 ax.tick_params(labelleft=False)
+                
+    #             # X-axis labels: Bottom row
+    #             if r == n_elements - 1:
+    #                 ax.set_xlabel(labels[c], fontsize=18)
+    #             else:
+    #                 ax.tick_params(labelbottom=False)
+
+    # # Global Colorbar - Using constrained layout principles to maintain plot sizes
+    # if cf is not None:
+    #     cbar = fig.colorbar(cf, ax=axes.ravel().tolist(), shrink=0.85, pad=0.06, anchor=(0.6, 1.3))
+    #     cbar.set_label('Posterior density', fontsize=18)
+    
+    # # Global Legend
+    # if alpha_true is not None:
+    #     import matplotlib.lines as mlines
+    #     gt_marker = mlines.Line2D([], [], color='red', marker='*', linestyle='None',
+    #                               markersize=18, markeredgecolor='white', label='Ground truth')
+    #     fig.legend(handles=[gt_marker], loc='upper right', bbox_to_anchor=(0.82, 0.93),
+    #                fontsize=18, frameon=True, facecolor='white', edgecolor='silver', shadow=True)
+    
+    # # Strict layout control to ensure 1:1 aspect and matching dimensions
+    # plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    
+    # if not os.path.exists(saving_path):
+    #     os.makedirs(saving_path)
+    # save_path = os.path.join(saving_path, f'PRUEBA_GT{pos}_JointPosterior_Matched_beta{beta}.png')
+    # plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    # plt.show()
+    # plt.close()
     # alpha_true = alpha_factors_true_test[pos, :] if alpha_factors_true_test is not None else None
     
     # # --- 1. Filter by Likelihood/Posterior Threshold ---
