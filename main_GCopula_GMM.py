@@ -65,11 +65,11 @@ def main():
     num_gaussians = 1
     n_dims = alpha_factors_true_train.shape[1]
     num_samples = 1 
-    beta = 0.16
+    beta = 0.35
     
     
     # Output Directory
-    filename = f"time12MarOLDARCH_Nosiy2.5Mild50_{lbound}lbound_Bayesian_MACloss_Beta{beta}_Samples{num_samples}_LR{base_lr}_Epochs{n_epochs}"
+    filename = f"12MarOLDARCH_Nosiy2.5Mild50_{lbound}lbound_Bayesian_MACloss_Beta{beta}_Samples{num_samples}_LR{base_lr}_Epochs{n_epochs}"
     folder_path = os.path.join('Output', "Gaussian_Copula", filename)
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)

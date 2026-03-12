@@ -12,8 +12,11 @@ import argparse
 import numpy as np 
 
 # from main_full import main
-from main_GCopula_GMM import main
-# 
+# from main_GCopula_GMM import main
+from main_GCop_Betamixmarginals import main
+
+
+
 # from main_server_sinusoidal import main_sinusoidal
 # from toy_squareroot import sqrt_problem
 # Execute in one GPU limiting its memory

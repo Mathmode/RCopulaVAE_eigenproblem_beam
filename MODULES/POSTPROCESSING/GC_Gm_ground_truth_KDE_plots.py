@@ -22,10 +22,25 @@ import seaborn as sns
 from MODULES.PREPROCESSING.preprocessing import load_data, load_known_matrices
 from MODULES.COPULAS.GC_GMm_eigen_functions import assemble_global_Kmatrices
 from MODULES.POSTPROCESSING.QMC_sampling import QuadratureMethod
+def plot_configuration():
+    # Set the global font to Serif (Academic/Math style)
+    plt.rc('font', size=16, family='serif')
+    
+    # Force the math text to use Computer Modern (the LaTeX font)
+    plt.rcParams['mathtext.fontset'] = 'cm'
+    
+    # Update other parameters for consistency
+    plt.rc('axes', titlesize=16, labelsize=16)
+    plt.rc('xtick', labelsize=16)
+    plt.rc('ytick', labelsize=16)
+    plt.rc('legend', fontsize=16)
+    plt.rc('figure', titlesize=16)
 
-# Setup plotting style
+# Applying styles
+# Note: sns.set often overrides rcParams, so we call plot_configuration() LAST
 sns.set(style="whitegrid", rc={"axes.facecolor": "#f0f0f0", "grid.color": "gray", "grid.linestyle": "--"})
 sns.set(style="dark")
+plot_configuration()
 
 # %% 1. Initialization and Data Loading
 K.utils.set_random_seed(1234)
@@ -57,7 +72,7 @@ Mfree, Ke_matrices, L_inv = load_known_matrices(data_path, n_elements)
 L_inv_tf = tf.cast(L_inv, dtype=tf.float32)
 
 # Scaling/noise parameters
-beta = 0.29
+beta = 0.19
 inv_gamma_val = 1.0 / (beta**2)
 lbound = 0.45  # Note: ensure this matches the paper's damage bounds bounds
 
@@ -161,7 +176,7 @@ def physics_engine_step(K_batch, L_inv_tf, n_modes, free_dofs, n_dofs):
     
 
 # %% 3. QMC Grid & Physics Pass
-saving_path = os.path.join("Output", "Ground_truth_plots", "Noisy_GT_plots", "Beta029")
+saving_path = os.path.join("Output", "Ground_truth_plots", "Noisy_GT_plots", "Beta019")
 if not os.path.exists(saving_path): os.makedirs(saving_path)
 
 qm = QuadratureMethod(gdim=5)
@@ -198,13 +213,12 @@ vert_pred = np.concatenate(all_vert, axis=0) # (N_qmc, 5, 4)
 # positions = [0, 1, 7,  9, 11, 17, 25, 34, 45, 100, 138, 219, 234, 343, 456, 555, 612, 690, 761]
 # positions  = [2,20,21,41,43,48,50,63, 64, 65, 77, 78, 91,92,98,99,102,560,576]
 # positions = [300,301,302,303,304,305,310,311,312,313,314,315,321,322,323]
-positions  = [1,17,25,41,43,48,77,78,219,313,315, 63, 246,383 ,455,459, 1000,1182,1396,1489]
+positions  = [1,17,25,41,43,48,63, 77,78,219,305, 313,315,1489]
 # positions = [ 815,  723, 1318, 1077, 1228, 1396,  664, 1679,  689,  279, 1257,
 #        1178,   30, 1707, 1182, 1772, 1398,  442,  120, 1500, 1349, 1360,
 #         969,  383,  246,  510, 1455, 1586, 1776, 1787, 1100,  293, 1530,
 #        1219,  743, 1163,  640,  745,  336,    3, 1282, 1299,  908,  459,
 #         371, 1643, 1489, 1038, 1267,  455]
-positions = [77]
 for pos in positions:
     # 1. Frequency Loss
     obs_f_scaled = Freqs_true_test[pos]

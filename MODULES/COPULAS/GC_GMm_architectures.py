@@ -10,7 +10,7 @@ import tensorflow_probability as tfp
 tfd = tfp.distributions
 tfb = tfp.bijectors
 import tensorflow.keras as K 
-from MODULES.COPULAS.GC_GMm_functions import gaussian_copula_samples, gaussian_copula_samples_optimized, gaussian_marginal_samples, build_correlation_matrices_from_cholesky
+from MODULES.COPULAS.GC_GMm_functions import gaussian_copula_samples, gaussian_marginal_samples, build_correlation_matrices_from_cholesky
 # from MODULES.TRAINING.rotation_matrices_funtions import copula_batch_givens_rotation
 
 
