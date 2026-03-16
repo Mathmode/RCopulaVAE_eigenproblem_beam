@@ -36,10 +36,12 @@ def main():
     K.backend.set_floatx('float32')
     
     # --- 2. DATA LOADING ---
-    data_folder = "01Mar2026_Noisy_E5_level25"
+    # data_folder = "01Mar2026_Noisy_E5_level25"
+    data_folder = "16Mar2026_Noisy_E10_level25"
+
     data_path = os.path.join("Data", data_folder)
     
-    n_elements = 5
+    n_elements = 10
     n_dofs = 2 * (n_elements + 1) 
     lbound = 0.45 
     fixed_dofs_indices = [0, n_dofs - 2]
@@ -59,17 +61,16 @@ def main():
                  (Vertmodes_true_train.shape[1] * Vertmodes_true_train.shape[2]))
     
     n_modes = Freqs_true_train.shape[1]
-    n_epochs = 50000
+    n_epochs = 10000
     base_lr = 1e-5
     epsi = 0.0 
     num_gaussians = 1
     n_dims = alpha_factors_true_train.shape[1]
     num_samples = 1 
-    beta = 0.35
-    
+    beta = 0.3
     
     # Output Directory
-    filename = f"12MarOLDARCH_Nosiy2.5Mild50_{lbound}lbound_Bayesian_MACloss_Beta{beta}_Samples{num_samples}_LR{base_lr}_Epochs{n_epochs}"
+    filename = f"Pruebamisfit_13Mar_simplerarch_Nosiy2.5Mild50_{lbound}lbound_Bayesian_MACloss_Beta{beta}_Samples{num_samples}_LR{base_lr}_Epochs{n_epochs}"
     folder_path = os.path.join('Output', "Gaussian_Copula", filename)
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)

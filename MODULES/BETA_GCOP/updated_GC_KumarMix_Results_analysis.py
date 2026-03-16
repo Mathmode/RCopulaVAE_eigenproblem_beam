@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Created on Sat Mar  7 12:38:01 2026
 @author: anafd
@@ -18,13 +17,12 @@ import tensorflow.keras as K
 K.backend.set_floatx('float32') 
 from MODULES.PREPROCESSING.preprocessing import load_data, load_known_matrices
 from MODULES.COPULAS.GC_GMm_functions import build_correlation_matrices_from_cholesky
-from MODULES.COPULAS.updated_GC_GMm_functions_for_results_analysis import calculate_testing_metrics, plot_results_PDF_uncertainty,  calculate_posterior_PDF_info, plot_physical_pdf_profile
-# from MODULES.COPULAS.GC_plot_posteriors import calculate_posterior_PDF_info, plot_physical_damage_profile
-from MODULES.COPULAS.GC_Gm_uncertainty_quantification import calculate_and_plot_calibration_curve, calculate_multivariate_mahalanobis, plot_error_vs_confidence
+from MODULES.BETA_GCOP.updated_GC_KumarMix_functions_for_results_analysis import calculate_testing_metrics, plot_results_PDF_uncertainty
+from MODULES.COPULAS.GC_plot_posteriors import calculate_posterior_PDF_info, plot_physical_damage_profile
 
 # --- Config ---
-filename = "13Mar_simplerarch_Nosiy2.5Mild50_0.45lbound_Bayesian_MACloss_Beta0.3_Samples1_LR1e-05_Epochs10000"
-folder_path = os.path.join('Output', 'Gaussian_Copula', filename)
+filename = "Kumar_Nosiy2.5_2mixtures_0.3RWeight_LR1e-06_Epochs10000"
+folder_path = os.path.join('Output', 'GCop_Betamixture', filename)
 lbound = 0.45
 # Load Problem Info
 info_path = os.path.join(folder_path, 'Problem_info.npy')
@@ -35,9 +33,10 @@ info = np.load(info_path, allow_pickle=True).item()
 # Extract parameters
 input_dim = info['input_dim_enc']
 n_dims = info['n_dims']
-beta = info['beta']
+num_beta_mix = info['num_beta_mix']
 mean_freq = info['mean_f']
 std_freq = info['std_f']
+regu_weight = info['regu_weight']
 n_elements = 5
 n_dofs = 2 * (n_elements + 1)
 batch_size = 256
@@ -113,9 +112,9 @@ data_path = os.path.join("Data", "01Mar2026_Noisy_E5_level25")
 
 print(f"Loading data from {data_path}...")
 
-(Freqs_true_train, Rotmodes_true_train, Vertmodes_true_train, alpha_factors_true_train, 
- Freqs_true_val, Rotmodes_true_val, Vertmodes_true_val, alpha_factors_true_val, 
- Freqs_true_test, Rotmodes_true_test, Vertmodes_true_test, alpha_factors_true_test, 
+(Freqs_true_train, Rotmodes_true_train, Vertmodes_true_train, z_factors_true_train, 
+ Freqs_true_val, Rotmodes_true_val, Vertmodes_true_val, z_factors_true_val, 
+ Freqs_true_test, Rotmodes_true_test, Vertmodes_true_test, z_factors_true_test, 
  mean_f, std_f) = load_data(data_path, batch_size)
 
 # Load Physics Matrices
@@ -125,25 +124,25 @@ Mfree, Ke_matrices, L_inv = load_known_matrices(data_path, n_elements)
 n_modes = Freqs_true_train.shape[1]
 
 Test_pred_props = np.load(os.path.join(folder_path, "Test_predicted_props.npy"),allow_pickle= True).item()
-test_means, test_scales, test_offdiag_elems, test_diag_elems, test_weight_vals  = Test_pred_props['test_means'],Test_pred_props['test_scales'], Test_pred_props['test_offdiag_elems'],Test_pred_props['test_diag_elems'],Test_pred_props['test_weight_vals'],
+test_alphas, test_betas, test_offdiag_elems, test_diag_elems, test_weight_vals  = Test_pred_props['test_alphas'],Test_pred_props['test_betas'], Test_pred_props['test_offdiag_elems'],Test_pred_props['test_diag_elems'],Test_pred_props['test_weight_vals'],
 test_datasets = {
     'Freqs_true_test': Freqs_true_test,
     'Rotmodes_true_test': Rotmodes_true_test,
     'Vertmodes_true_test':Vertmodes_true_test,
-    'alpha_factors_true_test': alpha_factors_true_test
+    'z_factors_true_test': z_factors_true_test
 }
 
 # Build L matrices
 L_matrices = build_correlation_matrices_from_cholesky(test_offdiag_elems, test_diag_elems, n_dims)
 
 predicted_stats = {
-    'test_means': test_means,
-    'test_scales': test_scales,
+    'test_alphas': test_alphas,
+    'test_betas': test_betas,
     'test_weights':test_weight_vals,
     'test_L_matrices': L_matrices
 }
 
-#%% GLOBAL PERFORMANCE METRICS
+
 print("\n--- Calculating Global Performance Metrics ---")
 
 # Execute metric calculation
@@ -176,52 +175,41 @@ print(f"Metrics saved to: {metrics_save_path}")
 # # Save element-wise report
 # elem_report.to_csv(os.path.join(folder_path, "element_wise_metrics.csv"), index=False)
 
-# %% VISUALIZATION
+
 
 # --- Visualization Loop 1---
 # positions = [0, 1, 7, 9, 11, 17, 25, 34, 45, 100, 138, 219, 234, 343, 456, 555, 612, 690, 761]
 # positions  = [2,20,21,41,43,48,50,63, 64, 65, 77, 78, 91,92,98,99,102,560,576]
 # positions = [300,301,302,303,304,305,310,311,312,313,314,315,321,322,323]
-# positions = [1,17,25,48,63,77,219,300,305,313,314,315,612,1489]
+positions = [1,17,48,63,77,219,300, 305,313,314,612,1489]
 # positions  = [1,17,25,41,43,48,77,78,219,313,315, 63, 246,383 ,455,459, 1000,1182,1396,1489]
 # positions = [ 815,  723, 1318, 1077, 1228, 1396,  664, 1679,  689,  279, 1257,
 #        1178,   30, 1707, 1182, 1772, 1398,  442,  120, 1500, 1349, 1360,
 #         969,  383,  246,  510, 1455, 1586, 1776, 1787, 1100,  293, 1530,
 #        1219,  743, 1163,  640,  745,  336,    3, 1282, 1299,  908,  459,
 #         371, 1643, 1489, 1038, 1267,  455]
-positions = [11,34, 48,63,77,78,91,219,1178]
+# 
 n_samples = 4096
 N_test_samples = len(Freqs_true_test)
 
 for pos in positions:
-    if pos < N_test_samples:        
-        # plot_results_PDF_uncertainty(fixed_dofs, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
-        #                                  predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, lbound, folder_path)
+    if pos < N_test_samples:
+        # plot_vae_copula_pdf(pos, predicted_stats, test_datasets, lbound, folder_path)
         
-        
-        z_true, z_samples, posterior_weights = calculate_posterior_PDF_info(fixed_dofs, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
+        plot_results_PDF_uncertainty(fixed_dofs, n_modes, regu_weight, n_samples, pos, n_dofs, free_dofs, test_datasets,
                                          predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, lbound, folder_path)
+        
+        
+        # z_true, z_samples, posterior_weights = calculate_posterior_PDF_info(model, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
+        #                                  predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, lbound, folder_path)
 
-        plot_physical_pdf_profile(z_samples, posterior_weights, z_true, n_elements, pos, folder_path)
+        # plot_physical_damage_profile(z_samples, posterior_weights, z_true, n_elements, pos, folder_path)
         
 
 
-#%% UNCERTAINTY QUNATIFICATION ANALYSIS
-# ==============================================================
-# NEW SECTION: Uncertainty Quantification Analysis
-# ==============================================================
-print("\n--- Generating Uncertainty Quantification (UQ) Plots ---")
 
-# 1. Marginal Calibration Curve
-calculate_and_plot_calibration_curve(predicted_stats, test_datasets, lbound, folder_path)
 
-# 2. Copula Latent Mahalanobis Verification (The Copula Justification)
-calculate_multivariate_mahalanobis(predicted_stats, test_datasets, lbound, folder_path)
 
-# 3. Error vs. Confidence Plot
-plot_error_vs_confidence(predicted_stats, test_datasets, folder_path)
-
-# ==============================================================
 
 
 

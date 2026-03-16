@@ -72,7 +72,7 @@ Mfree, Ke_matrices, L_inv = load_known_matrices(data_path, n_elements)
 L_inv_tf = tf.cast(L_inv, dtype=tf.float32)
 
 # Scaling/noise parameters
-beta = 0.19
+beta = 0.3
 inv_gamma_val = 1.0 / (beta**2)
 lbound = 0.45  # Note: ensure this matches the paper's damage bounds bounds
 
@@ -176,7 +176,7 @@ def physics_engine_step(K_batch, L_inv_tf, n_modes, free_dofs, n_dofs):
     
 
 # %% 3. QMC Grid & Physics Pass
-saving_path = os.path.join("Output", "Ground_truth_plots", "Noisy_GT_plots", "Beta019")
+saving_path = os.path.join("Output", "Ground_truth_plots", "Noisy_GT_plots", "Beta03")
 if not os.path.exists(saving_path): os.makedirs(saving_path)
 
 qm = QuadratureMethod(gdim=5)
@@ -213,12 +213,15 @@ vert_pred = np.concatenate(all_vert, axis=0) # (N_qmc, 5, 4)
 # positions = [0, 1, 7,  9, 11, 17, 25, 34, 45, 100, 138, 219, 234, 343, 456, 555, 612, 690, 761]
 # positions  = [2,20,21,41,43,48,50,63, 64, 65, 77, 78, 91,92,98,99,102,560,576]
 # positions = [300,301,302,303,304,305,310,311,312,313,314,315,321,322,323]
-positions  = [1,17,25,41,43,48,63, 77,78,219,305, 313,315,1489]
-# positions = [ 815,  723, 1318, 1077, 1228, 1396,  664, 1679,  689,  279, 1257,
-#        1178,   30, 1707, 1182, 1772, 1398,  442,  120, 1500, 1349, 1360,
-#         969,  383,  246,  510, 1455, 1586, 1776, 1787, 1100,  293, 1530,
-#        1219,  743, 1163,  640,  745,  336,    3, 1282, 1299,  908,  459,
-#         371, 1643, 1489, 1038, 1267,  455]
+# positions  = [1,17,25,41,43,48,63, 77,78,219,305, 313,315,1489]
+positions = [ 815,  723, 1318, 1077, 1228, 1396,  664, 1679,  689,  279, 1257,
+       1178,   30, 1707, 1182, 1772, 1398,  442,  120, 1500, 1349, 1360,
+        969,  383,  246,  510, 1455, 1586, 1776, 1787, 1100,  293, 1530,
+       1219,  743, 1163,  640,  745,  336,    3, 1282, 1299,  908,  459,
+        371, 1643, 1489, 1038, 1267,  455]
+
+# positions = [63,77,219]
+
 for pos in positions:
     # 1. Frequency Loss
     obs_f_scaled = Freqs_true_test[pos]
@@ -306,10 +309,10 @@ for pos in positions:
                 ax.axis('off')
 
             if r >= c:
-                ax.tick_params(labelsize=18)
-                if c == 0 and r != 0: ax.set_ylabel(labels[r], fontsize=18)
+                ax.tick_params(labelsize=22)
+                if c == 0 and r != 0: ax.set_ylabel(labels[r], fontsize=30)
                 else: ax.tick_params(labelleft=False)
-                if r == n_elements - 1: ax.set_xlabel(labels[c], fontsize=18)
+                if r == n_elements - 1: ax.set_xlabel(labels[c], fontsize=30)
                 else: ax.tick_params(labelbottom=False)
 
     if cf is not None:

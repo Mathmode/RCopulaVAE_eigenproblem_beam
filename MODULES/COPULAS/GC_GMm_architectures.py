@@ -13,69 +13,6 @@ import tensorflow.keras as K
 from MODULES.COPULAS.GC_GMm_functions import gaussian_copula_samples, gaussian_marginal_samples, build_correlation_matrices_from_cholesky
 # from MODULES.TRAINING.rotation_matrices_funtions import copula_batch_givens_rotation
 
-
-# ## NEW ARCHITECTURE 10TH MARCH 
-# def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians, lbound):
-#     """
-#     Fully Connected Encoder Architecture.
-    
-#     Robustness Update:
-#     - Reverted to 'relu' activation for maximum stability and standard behavior.
-#     - Kept L2 regularization to prevent overfitting.
-#     - Outputs GMM parameters: Means, Sigmas, Weights, and Cholesky factors (L).
-#     """
-#     input1 = K.Input(shape=(input_dim,), name='Innnputlayer')
-    
-#     # LAYER 1: Robust 'relu' activation
-#     lay1 = K.layers.Dense(1024, activation='relu', 
-#                           kernel_initializer="he_uniform", bias_initializer="zeros", 
-#                           name='lay1',
-#                           kernel_regularizer=tf.keras.regularizers.l2(1e-5))(input1) 
-    
-#     # LAYER 2: Robust 'relu' activation
-#     lay2 = K.layers.Dense(1024, activation=tf.keras.layers.LeakyReLU(alpha=0.01), #activation=tf.keras.layers.leakyReLU(alpha=0.01)
-#                           kernel_initializer="he_uniform", bias_initializer="zeros",
-#                           name='lay2',
-#                           kernel_regularizer=tf.keras.regularizers.l2(1e-5))(lay1)
-    
-#     # LAYER 3: Robust 'relu' activation
-#     lay3 = K.layers.Dense(1024, activation=tf.keras.layers.LeakyReLU(alpha=0.01), 
-#                           kernel_initializer="he_uniform", bias_initializer="zeros", 
-#                           name='lay3',
-#                           kernel_regularizer=tf.keras.regularizers.l2(1e-5))(lay2)
-
-#     # OUTPUTS
-    
-#     # MEANS
-#     means_raw = K.layers.Dense(n_dims * num_gaussians, activation='sigmoid',
-#                         kernel_initializer='glorot_uniform', # or glorot_uniform
-#                         bias_initializer='zeros', 
-#                         name='means_raw')(lay3)
-#     # Scale means to be strictly within [lbound, 1]
-#     means =  (lbound + 0.001) + (0.998 - lbound) * means_raw 
-
-#     # SIGMAS
-#     # Sigmoid + scaling ensures positive, bounded standard deviations
-#     sigmas = K.layers.Dense(n_dims*num_gaussians, activation='sigmoid', name='stddevs')(lay3)
-#     sigmas = 1e-6 + 0.999 * sigmas 
-      
-#     # CORRELATION (L-Matrix for Cholesky Decomp)
-#     # L-matrix elements for covariance
-#     n_correlations = n_dims*(n_dims-1)//2
-#     off_diag_L_elems = K.layers.Dense(n_correlations, activation='linear', name='off_diag_elements')(lay3)
-    
-#     diag_L_elems = K.layers.Dense(n_dims, activation='softplus', name='diag_elements')(lay3)
-#     diag_L_elems = diag_L_elems + 1e-6
-
-#     # WEIGHTS
-#     # Softplus ensures weights are positive
-#     weight_vals = K.layers.Dense(n_dims*num_gaussians, activation='softplus', name='weights')(lay3)
-    
-#     outputs = tf.concat([means, sigmas, weight_vals, off_diag_L_elems, diag_L_elems], axis=1)
-#     return K.Model(inputs=input1, outputs=outputs)
-
-
-####### ## # OLD * ARCHITECTURE USED UNTIL 06 MARCH. WE THEN TRIED DIFFERENT ACTIVATIONS
 def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians, lbound):
     """
     Fully Connected Encoder Architecture.
@@ -88,19 +25,19 @@ def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians, lbound):
     input1 = K.Input(shape=(input_dim,), name='Innnputlayer')
     
     # LAYER 1: Robust 'relu' activation
-    lay1 = K.layers.Dense(1024, activation='relu', 
+    lay1 = K.layers.Dense(128, activation='relu', 
                           kernel_initializer="he_uniform", bias_initializer="zeros", 
                           name='lay1',
                           kernel_regularizer=tf.keras.regularizers.l2(1e-5))(input1) 
     
     # LAYER 2: Robust 'relu' activation
-    lay2 = K.layers.Dense(1024, activation='relu', #activation=tf.keras.layers.leakyReLU(alpha=0.01)
+    lay2 = K.layers.Dense(128, activation='relu', #activation=tf.keras.layers.leakyReLU(alpha=0.01)
                           kernel_initializer="he_uniform", bias_initializer="zeros",
                           name='lay2',
                           kernel_regularizer=tf.keras.regularizers.l2(1e-5))(lay1)
     
     # LAYER 3: Robust 'relu' activation
-    lay3 = K.layers.Dense(1024, activation='relu', 
+    lay3 = K.layers.Dense(128, activation='relu', 
                           kernel_initializer="he_uniform", bias_initializer="zeros", 
                           name='lay3',
                           kernel_regularizer=tf.keras.regularizers.l2(1e-5))(lay2)

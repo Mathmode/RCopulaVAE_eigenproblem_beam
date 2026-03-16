@@ -255,7 +255,7 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         
     
         return log_prob_joint_normal - log_prob_marginals_standard
-    
+   
     
     def Marginal_pdf_logprob(self,y_true, y_pred):
         '''
@@ -285,7 +285,7 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
     
     def Joint_copula_dens_term(self,y_true, y_pred):
         Copula_density_term = self.Copula_pdf_logprob(y_true, y_pred)
-        Marginal_logprob_term = self.Marginal_pdf_logprob(y_true,y_pred)   
+        Marginal_logprob_term = self.Marginal_pdf_logprob(y_true,y_pred)  
         
         joint_copula_logprob = tf.math.reduce_mean(Copula_density_term + Marginal_logprob_term, axis = None)
         joint_copula_logprob = tf.math.square(tf.cast(self.beta, dtype=tf.float32))* (joint_copula_logprob)
