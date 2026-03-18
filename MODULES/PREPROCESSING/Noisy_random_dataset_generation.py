@@ -156,13 +156,13 @@ def generate_dataset(n_samples, n_elements, n_modes, data_file_path,
 if __name__ == "__main__":
     n_elements = 10
     n_modes = 5
-    N_samples = 10000 
+    N_samples = 20000 
     
     # 2.5% Frequency Noise, 5% Mode Shape Noise
     F_NOISE = 0.025
     M_NOISE = 0.05
 
-    folder_name = f"16Mar2026_Noisy_E{n_elements}_level{int(F_NOISE*100)}"
+    folder_name = f"16Mar2026_Noisy_E{n_elements}_level{int(F_NOISE*1000)}_5modes"
     data_file_path = os.path.join("Data", folder_name)
 
     if not os.path.exists(data_file_path):
@@ -174,9 +174,9 @@ if __name__ == "__main__":
     )
 
     # Save
-    np.save(os.path.join(data_file_path, 'freqs_data_noisy.npy'), freqs)
-    np.save(os.path.join(data_file_path, 'vertmodes_data_noisy.npy'), vert)
-    np.save(os.path.join(data_file_path, 'rotmodes_data_noisy.npy'), rot)
+    np.save(os.path.join(data_file_path, 'freqs_data_true.npy'), freqs)
+    np.save(os.path.join(data_file_path, 'vertmodes_data_true.npy'), vert)
+    np.save(os.path.join(data_file_path, 'rotmodes_data_true.npy'), rot)
     np.save(os.path.join(data_file_path, 'alpha_factors_true.npy'), alphas)
     
     print(f"Dataset saved to {data_file_path}")

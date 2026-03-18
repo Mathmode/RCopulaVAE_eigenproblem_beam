@@ -41,10 +41,12 @@ def Fully_connected_enc_Beta(input_dim, n_dims, num_beta_mix, lbound):
     # This mathematically allows the distribution to form J-shapes and place 
     # high probability density exactly at the undamaged state (z = 1.0).
     alphas = K.layers.Dense(n_dims * num_beta_mix, activation='softplus', name='alphas_raw')(lay3)
-    alphas = tf.clip_by_value(alphas + 0.1, 0.1, 150.0) 
+    # alphas = alphas+0.1
+    alphas = tf.clip_by_value(alphas + 0.1, 0.1, 100.0) 
 
     betas = K.layers.Dense(n_dims * num_beta_mix, activation='softplus', name='betas_raw')(lay3)
-    betas = tf.clip_by_value(betas + 0.1, 0.1, 150.0)
+    # betas = betas+0.1
+    betas = tf.clip_by_value(betas + 0.1, 0.1, 100.0)
 
     # MIXTURE WEIGHTS
     weight_vals = K.layers.Dense(n_dims * num_beta_mix, activation='linear', name='weights')(lay3)

@@ -21,7 +21,7 @@ from MODULES.BETA_GCOP.updated_GC_KumarMix_functions_for_results_analysis import
 from MODULES.COPULAS.GC_plot_posteriors import calculate_posterior_PDF_info, plot_physical_damage_profile
 
 # --- Config ---
-filename = "Kumar_Nosiy2.5_2mixtures_0.3RWeight_LR1e-06_Epochs10000"
+filename = "Kumar_Nosiy2.5_2mixtures_0.2RWeight_LR1e-06_Epochs40000"
 folder_path = os.path.join('Output', 'GCop_Betamixture', filename)
 lbound = 0.45
 # Load Problem Info

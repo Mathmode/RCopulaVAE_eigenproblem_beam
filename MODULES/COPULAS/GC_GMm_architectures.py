@@ -12,7 +12,6 @@ tfb = tfp.bijectors
 import tensorflow.keras as K 
 from MODULES.COPULAS.GC_GMm_functions import gaussian_copula_samples, gaussian_marginal_samples, build_correlation_matrices_from_cholesky
 # from MODULES.TRAINING.rotation_matrices_funtions import copula_batch_givens_rotation
-
 def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians, lbound):
     """
     Fully Connected Encoder Architecture.
@@ -35,8 +34,7 @@ def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians, lbound):
                           kernel_initializer="he_uniform", bias_initializer="zeros",
                           name='lay2',
                           kernel_regularizer=tf.keras.regularizers.l2(1e-5))(lay1)
-    
-    # LAYER 3: Robust 'relu' activation
+
     lay3 = K.layers.Dense(128, activation='relu', 
                           kernel_initializer="he_uniform", bias_initializer="zeros", 
                           name='lay3',
@@ -55,7 +53,8 @@ def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians, lbound):
     # SIGMAS
     # Sigmoid + scaling ensures positive, bounded standard deviations
     sigmas = K.layers.Dense(n_dims*num_gaussians, activation='sigmoid', name='stddevs')(lay3)
-    sigmas = 1e-6 + 0.999 * sigmas 
+    # sigmas = 1e-6 + 0.999 * sigmas 
+    sigmas = 1e-4 + 0.5 * sigmas
       
     # CORRELATION (L-Matrix for Cholesky Decomp)
     # L-matrix elements for covariance
@@ -73,6 +72,64 @@ def Fully_connected_enc_GC(input_dim, n_dims, num_gaussians, lbound):
     return K.Model(inputs=input1, outputs=outputs)
 
 
+def Fully_connected_enc_GC_highdims(input_dim, n_dims, num_gaussians, lbound):
+    """
+    Fully Connected Encoder Architecture.
+    
+    Robustness Update:
+    - Reverted to 'relu' activation for maximum stability and standard behavior.
+    - Kept L2 regularization to prevent overfitting.
+    - Outputs GMM parameters: Means, Sigmas, Weights, and Cholesky factors (L).
+    """
+    input1 = K.Input(shape=(input_dim,), name='Innnputlayer')
+    
+    # Layer 1
+    x = K.layers.Dense(256, kernel_initializer="he_uniform", name='dense_1')(input1)
+    x = K.layers.BatchNormalization()(x)
+    x = K.layers.Activation('relu')(x)
+    
+    # Layer 2
+    x = K.layers.Dense(256, kernel_initializer="he_uniform", name='dense_2')(x)
+    x = K.layers.BatchNormalization()(x)
+    x = K.layers.Activation('relu')(x)
+    x = K.layers.Dropout(0.1)(x)
+    
+    # Layer 3
+    x = K.layers.Dense(128, kernel_initializer="he_uniform", name='dense_3')(x)
+    x = K.layers.BatchNormalization()(x)
+    lay3 = K.layers.Activation('relu')(x)
+
+    # OUTPUTS
+    
+    # MEANS
+    means_raw = K.layers.Dense(n_dims * num_gaussians, activation='sigmoid',
+                        kernel_initializer='zeros', 
+                        bias_initializer='zeros', 
+                        name='means_raw')(lay3)
+    # Scale means to be strictly within [lbound, 1]
+    means =  (lbound + 0.001) + (0.998 - lbound) * means_raw 
+
+    # SIGMAS
+    # Sigmoid + scaling ensures positive, bounded standard deviations
+    sigmas = K.layers.Dense(n_dims*num_gaussians, activation='sigmoid', name='stddevs')(lay3)
+    # sigmas = 1e-6 + 0.999 * sigmas 
+    sigmas = 1e-4 + 0.5 * sigmas
+      
+    # CORRELATION (L-Matrix for Cholesky Decomp)
+    # L-matrix elements for covariance
+    n_correlations = n_dims*(n_dims-1)//2
+    off_diag_L_elems = K.layers.Dense(n_correlations, activation='linear', name='off_diag_elements')(lay3)
+    
+    diag_L_elems = K.layers.Dense(n_dims, activation='softplus', name='diag_elements')(lay3)
+    diag_L_elems = diag_L_elems + 1e-6
+
+    # WEIGHTS
+    # Softplus ensures weights are positive
+    weight_vals = K.layers.Dense(n_dims*num_gaussians, activation='softplus', name='weights')(lay3)
+    
+    outputs = tf.concat([means, sigmas, weight_vals, off_diag_L_elems, diag_L_elems], axis=1)
+    return K.Model(inputs=input1, outputs=outputs)
+
 
 class Copula_pdf_layer(tf.keras.layers.Layer):
     def __init__(self, n_dims, num_gaussians, num_samples, lbound ,**kwargs):
@@ -83,34 +140,82 @@ class Copula_pdf_layer(tf.keras.layers.Layer):
         self.lbound = lbound #lower bound for truncation 
     def call(self, inputs):
         means, scales, weight_vals, offdiag_elems, diag_elems  = inputs
- 
-        # Validación de seguridad para cazar el error matemático
-        tf.debugging.assert_all_finite(means, "ERROR: means contiene NaNs")
-        tf.debugging.assert_all_finite(scales, "ERROR: scales contiene NaNs")
-        tf.debugging.assert_all_finite(weight_vals, "ERROR: weight_vals contiene NaNs")
-        tf.debugging.assert_all_finite(offdiag_elems, "ERROR: offdiag contiene NaNs")
-        # Input validation: Check for NaNs
-        tf.debugging.assert_all_finite(means, "means contains NaN or Inf")  # Added check
-        tf.debugging.assert_all_finite(scales, "scales contains NaN or Inf")  # Added check
-        tf.debugging.assert_all_finite(weight_vals, "weight_vals contains NaN or Inf")
-        tf.debugging.assert_all_finite(offdiag_elems, "offdiag contains NaN or Inf")
-               
+                
         LT_matrices  = build_correlation_matrices_from_cholesky(offdiag_elems, diag_elems, self.n_dims)
         copula_samples = gaussian_copula_samples(LT_matrices, self.n_dims, self.num_samples, self.lbound)
-        # copula_samples = gaussian_copula_samples_optimized(LT_matrices, self.n_dims, self.num_samples, self.lbound)
 
-        
        # Build samples assuming single Gaussian marginals
         marginal_samples = gaussian_marginal_samples(means, scales, copula_samples, self.lbound)
         
         # Build samples assuming multimodal marginals (more expensive)
         # marginal_sampless = build_marginal_samples(means, scales, weight_vals, copula_samples)
         # marginal_samples = tf.reshape(marginal_sampless, shape = (-1, self.num_gaussians, self.n_dims))
-        # tf.print(marginal_samples)
         
         return marginal_samples, copula_samples, LT_matrices
 
 
+
+# def Fully_connected_enc_GC_highdims(input_dim, n_dims, num_gaussians, lbound):
+#     """
+#     Refined High-Dimensional Encoder for 10-20 elements.
+#     - Uses LeakyReLU for better gradient flow in the 'negative' regime.
+#     - Implements Residual connections to prevent vanishing gradients.
+#     - Uses LayerNormalization instead of BatchNormalization for more stable inference.
+#     """
+#     input_layer = K.Input(shape=(input_dim,), name='Input_Modal_Data')
+    
+#     # Initial Projection
+#     x = K.layers.Dense(512, kernel_initializer="he_normal")(input_layer)
+#     x = K.layers.LayerNormalization()(x)
+#     x = K.layers.Activation('relu')(x)
+    
+#     # Residual Block 1
+#     shortcut = K.layers.Dense(512)(x)
+#     x = K.layers.Dense(512, kernel_initializer="he_normal")(x)
+#     x = K.layers.LayerNormalization()(x)
+#     x = K.layers.Activation('relu')(x)
+#     x = K.layers.Dense(512, kernel_initializer="he_normal")(x)
+#     x = K.layers.LayerNormalization()(x)
+#     x = K.layers.Add()([x, shortcut])
+#     x = K.layers.Activation('relu')(x)
+    
+#     # Residual Block 2 (Bottleneck)
+#     shortcut = K.layers.Dense(256)(x)
+#     x = K.layers.Dense(256, kernel_initializer="he_normal")(x)
+#     x = K.layers.LayerNormalization()(x)
+#     x = K.layers.Activation('relu')(x)
+#     x = K.layers.Add()([x, shortcut])
+#     x = K.layers.Activation('relu')(x)
+    
+#     # Representation Layer
+#     latent = K.layers.Dense(256, activation='relu', name='latent_features')(x)
+
+#     # --- OUTPUT HEADS ---
+    
+#     # 1. MEANS (Stiffness factors alpha)
+#     # Using a slightly wider sigmoid range to avoid vanishing gradients at bounds
+#     means_raw = K.layers.Dense(n_dims * num_gaussians, activation='sigmoid', name='means_raw')(latent)
+#     # Applying a tiny buffer to avoid exact 0/1 but allowing the model to get close to lbound
+#     means = lbound + (1.0 - lbound) * means_raw 
+
+#     # 2. SIGMAS (Uncertainty)
+#     # High-dim models need very stable sigmas. Softplus is safer than Sigmoid for scale.
+#     sigmas_raw = K.layers.Dense(n_dims * num_gaussians, activation='softplus', name='stddevs')(latent)
+#     sigmas = sigmas_raw + 1e-4 # Minimum floor for stability
+      
+#     # 3. CORRELATION (Cholesky L)
+#     n_correlations = n_dims * (n_dims - 1) // 2
+#     off_diag_L_elems = K.layers.Dense(n_correlations, activation='linear', 
+#                                      kernel_initializer='zeros', name='off_diag_elements')(latent)
+    
+#     diag_L_elems = K.layers.Dense(n_dims, activation='softplus', name='diag_elements')(latent)
+#     diag_L_elems = diag_L_elems + 1e-4
+
+#     # 4. WEIGHTS (GMM)
+#     weight_vals = K.layers.Dense(n_dims * num_gaussians, activation='softplus', name='weights')(latent)
+    
+#     outputs = tf.concat([means, sigmas, weight_vals, off_diag_L_elems, diag_L_elems], axis=1)
+#     return K.Model(inputs=input_layer, outputs=outputs)
 
 
 

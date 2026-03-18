@@ -106,6 +106,12 @@ def fast_kumaraswamy_quantile(a_params, b_params, weight_vals, copula_samples, l
 @tf.function
 def kumarswamy_marginal_samples(a_params, b_params, weight_vals, copula_samples, lbound):
     return fast_kumaraswamy_quantile(a_params, b_params, weight_vals, copula_samples, lbound)
+
+
+
+
+
+
 # import tensorflow as tf
 # import tensorflow_probability as tfp
 # tfd = tfp.distributions

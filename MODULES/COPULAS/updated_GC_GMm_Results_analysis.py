@@ -23,7 +23,7 @@ from MODULES.COPULAS.updated_GC_GMm_functions_for_results_analysis import calcul
 from MODULES.COPULAS.GC_Gm_uncertainty_quantification import calculate_and_plot_calibration_curve, calculate_multivariate_mahalanobis, plot_error_vs_confidence
 
 # --- Config ---
-filename = "13Mar_simplerarch_Nosiy2.5Mild50_0.45lbound_Bayesian_MACloss_Beta0.3_Samples1_LR1e-05_Epochs10000"
+filename = "19MarHD_10Els_5modes_Nosiy2.5_0.45lbound_Beta0.35_50000Epochs"
 folder_path = os.path.join('Output', 'Gaussian_Copula', filename)
 lbound = 0.45
 # Load Problem Info
@@ -38,9 +38,9 @@ n_dims = info['n_dims']
 beta = info['beta']
 mean_freq = info['mean_f']
 std_freq = info['std_f']
-n_elements = 5
+n_elements = 10
 n_dofs = 2 * (n_elements + 1)
-batch_size = 256
+batch_size = 512
 
 # 2. Identify fixed indices (Simply Supported)
 # Node 0 vertical is index 0; Node N vertical is index 10
@@ -107,9 +107,8 @@ plot_trainval_loss(history_, folder_path)
 
 # %% 1. Initialization and Data Loading
 K.utils.set_random_seed(1234)
-# data_path = os.path.join("Data", "11Feb2026_Corrected_Randomdata5elements")
-# data_path = os.path.join("Data", "28Feb2026_MildDam50_Randomdata5elements")
-data_path = os.path.join("Data", "01Mar2026_Noisy_E5_level25")
+# data_path = os.path.join("Data", "01Mar2026_Noisy_E5_level25")
+data_path = os.path.join("Data", "16Mar2026_Noisy_E10_level25_5modes")
 
 print(f"Loading data from {data_path}...")
 
@@ -195,14 +194,14 @@ N_test_samples = len(Freqs_true_test)
 
 for pos in positions:
     if pos < N_test_samples:        
-        # plot_results_PDF_uncertainty(fixed_dofs, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
-        #                                  predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, lbound, folder_path)
-        
-        
-        z_true, z_samples, posterior_weights = calculate_posterior_PDF_info(fixed_dofs, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
+        plot_results_PDF_uncertainty(fixed_dofs, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
                                          predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, lbound, folder_path)
+        
+        
+        # z_true, z_samples, posterior_weights = calculate_posterior_PDF_info(fixed_dofs, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
+        #                                  predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, lbound, folder_path)
 
-        plot_physical_pdf_profile(z_samples, posterior_weights, z_true, n_elements, pos, folder_path)
+        # plot_physical_pdf_profile(z_samples, posterior_weights, z_true, n_elements, pos, folder_path)
         
 
 

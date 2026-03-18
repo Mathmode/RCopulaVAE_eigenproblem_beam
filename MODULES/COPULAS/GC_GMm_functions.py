@@ -124,35 +124,3 @@ def gaussian_marginal_samples(locs, scales, copula_samples, lbound):
     return marginal_samples
 
 
-
-# @tf.function(jit_compile=True)
-# def gaussian_copula_samples_optimized(LT_matrices, n_dims, n_samples, lbound):
-#     """
-#     Inverse Transform Sampling: Guarantees samples are in the [lbound, 1] 
-#     range without needing a while_loop.
-#     """
-#     batch_size = tf.shape(LT_matrices)[0]
-    
-#     # Map physical lower bound to probability space [0, 1]
-#     u_min = tfd.Normal(0.0, 1.0).cdf(tf.cast(lbound +0.0001, tf.float32))
-#     u_max = 0.999 
-    
-#     # Generate random samples ONLY within the valid percentile window
-#     u_samples = tf.random.uniform(
-#         shape=[batch_size, n_samples, n_dims], 
-#         minval=u_min, 
-#         maxval=u_max, 
-#         dtype=tf.float32
-#     )
-    
-#     # Convert to standard Normal Z-space
-#     z_samples = tfd.Normal(0.0, 1.0).quantile(u_samples)
-    
-#     # Apply correlation (Cholesky matrix)
-#     copula_samples_z = tf.matmul(z_samples, LT_matrices, transpose_b=True)
-    
-#     # Transform back to Uniform space for the Copula representation
-#     copula_samples_u = tfd.Normal(0.0, 1.0).cdf(copula_samples_z)
-    
-#     return tf.clip_by_value(copula_samples_u, 1e-7, 1.0 - 1e-7)
-

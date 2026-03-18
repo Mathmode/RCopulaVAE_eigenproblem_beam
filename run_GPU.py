@@ -14,6 +14,7 @@ import numpy as np
 # from main_full import main
 from main_GCopula_GMM import main
 # from main_GCop_Betamixmarginals import main
+# from main_GCopula_Surrogate import main
 
 
 

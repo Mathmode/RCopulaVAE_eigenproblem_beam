@@ -29,6 +29,34 @@ from MODULES.COPULAS.GC_GMm_models import My_CopulaVAE_withEigen
 # Assuming plot functions are updated to handle the new return structure
 from MODULES.COPULAS.GC_postprocessing_copulas import plot_trainval_loss, plot_JointPDF_loss, plot_Freqs_loss
 
+## ADDITIONAL WORK FOR PAPER: COMPARING RESULTS AGAINST A FULLY CONNECTED NN DECODER
+from MODULES.COPULAS.GC_GMm_model_surrogatedecoder import My_CopulaVAE_Surrogate 
+
+# --- CUSTOM CALLBACK DEFINITION ---
+class DelayedEarlyStopping(K.callbacks.Callback):
+    def __init__(self, patience=1000, start_epoch=10000):
+        super(DelayedEarlyStopping, self).__init__()
+        self.patience = patience
+        self.start_epoch = start_epoch
+        self.best_loss = np.inf
+        self.wait = 0
+
+    def on_epoch_end(self, epoch, logs=None):
+        current_loss = logs.get("val_loss")
+        if current_loss is None: return
+        if epoch >= self.start_epoch:
+            if current_loss < self.best_loss:
+                self.best_loss = current_loss
+                self.wait = 0
+                print(f" - Epoch {epoch}: New best val_loss: {current_loss:.6f}")
+            else:
+                self.wait += 1
+                if self.wait >= self.patience:
+                    print(f"\n✅ Early stopping triggered at epoch {epoch}.")
+                    self.model.stop_training = True
+        elif current_loss < self.best_loss:
+            self.best_loss = current_loss
+
 
 def main():
     # --- 1. GLOBAL SETTINGS ---
@@ -37,7 +65,7 @@ def main():
     
     # --- 2. DATA LOADING ---
     # data_folder = "01Mar2026_Noisy_E5_level25"
-    data_folder = "16Mar2026_Noisy_E10_level25"
+    data_folder = "16Mar2026_Noisy_E10_level25_5modes"
 
     data_path = os.path.join("Data", data_folder)
     
@@ -45,7 +73,8 @@ def main():
     n_dofs = 2 * (n_elements + 1) 
     lbound = 0.45 
     fixed_dofs_indices = [0, n_dofs - 2]
-    batch_size = 256
+    batch_size = 512
+    
     
     print(f"Loading data from {data_path}...")
     (Freqs_true_train, Rotmodes_true_train, Vertmodes_true_train, alpha_factors_true_train, 
@@ -61,30 +90,42 @@ def main():
                  (Vertmodes_true_train.shape[1] * Vertmodes_true_train.shape[2]))
     
     n_modes = Freqs_true_train.shape[1]
-    n_epochs = 10000
+    n_nodes = Rotmodes_true_train.shape[2]
+    n_epochs = 50000
     base_lr = 1e-5
-    epsi = 0.0 
     num_gaussians = 1
     n_dims = alpha_factors_true_train.shape[1]
     num_samples = 1 
     beta = 0.3
     
     # Output Directory
-    filename = f"Pruebamisfit_13Mar_simplerarch_Nosiy2.5Mild50_{lbound}lbound_Bayesian_MACloss_Beta{beta}_Samples{num_samples}_LR{base_lr}_Epochs{n_epochs}"
+    filename = f"20MarHD_{n_elements}Els_{n_modes}modes_Nosiy2.5_{lbound}lbound_Beta{beta}_{n_epochs}Epochs"
     folder_path = os.path.join('Output', "Gaussian_Copula", filename)
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
         
+    
 
+    # --- 6. TRAINING ---
     print(f"Initializing Model...")
     model = My_CopulaVAE_withEigen(
         input_dim=input_dim, num_dofs=n_dofs, n_elements=n_elements,
         n_modes=n_modes, Ke_matrices=Ke_matrices, Mfree=Mfree,
-        L_inv=L_inv, epsi=epsi, n_dims=n_dims, num_gaussians=num_gaussians,
+        L_inv=L_inv, n_dims=n_dims, num_gaussians=num_gaussians,
         num_samples=num_samples, beta=beta, mean_f=mean_f,
         std_f=std_f, lbound=lbound, fixed_dofs_indices=fixed_dofs_indices
     )
     
+    # --- 4. OPTIMIZER & COMPILATION ---
+    # Using a learning rate schedule helps with convergence in high dimensions
+    lr_schedule = K.optimizers.schedules.ExponentialDecay(
+        initial_learning_rate=base_lr,
+        decay_steps=10000,
+        decay_rate=0.9
+    )
+    optim = K.optimizers.Adam(learning_rate=lr_schedule, clipnorm=0.5)
+    
+        
     # Capture INITIAL weights for verification
     # We trigger a build first
     _ = model([Freqs_true_train[:1], Rotmodes_true_train[:1], Vertmodes_true_train[:1], alpha_factors_true_train[:1]])
@@ -92,7 +133,7 @@ def main():
     print(f"Initial Encoder Weight Sum: {initial_weights_sum:.6f}")
          
     # --- 4. COMPILATION ---
-    optim = K.optimizers.Adam(learning_rate=base_lr, clipnorm=1.0)
+    # optim = K.optimizers.Adam(learning_rate=base_lr, clipnorm=1.0)
     run_eagerly = False
     model.compile(
         optimizer=optim, 
@@ -104,6 +145,10 @@ def main():
     # --- 5. TRAINING ---
     start_time = time.time()
     print("Starting Training...")
+    # ---  CALLBACKS SETUP ---
+    # Define the delayed stopping: start after 10k epochs, wait 1k epochs for improvement
+    delayed_stop = DelayedEarlyStopping(patience=1000, start_epoch=10000)
+    
     model_history = model.fit(
         x=[Freqs_true_train, Rotmodes_true_train, Vertmodes_true_train, alpha_factors_true_train],
         y=[alpha_factors_true_train, alpha_factors_true_train],
@@ -112,8 +157,8 @@ def main():
         shuffle=True,
         validation_data=(
             [Freqs_true_val, Rotmodes_true_val, Vertmodes_true_val, alpha_factors_true_val], 
-            [alpha_factors_true_val, alpha_factors_true_val]
-        )
+            [alpha_factors_true_val, alpha_factors_true_val], 
+        ), callbacks=[delayed_stop]
     )
     
     ## with these lines we prevent having to load the trained model in the postprocessing, which was supisciously not working well (FIX)
@@ -442,3 +487,76 @@ if __name__ == "__main__":
 
 # if __name__ == "__main__":
 #     main()
+
+    # def count_model_params(model, model_name="Model", input_data=None):
+    #     """
+    #     Detailed breakdown of trainable and non-trainable parameters.
+        
+    #     If parameters appear as 0, provide 'input_data' (a sample batch) 
+    #     to force the model to build its internal layers.
+        
+    #     Safety: This function forces execution on CPU to avoid XLA/libdevice 
+    #     errors often encountered with jit_compile=True during metadata checks.
+    #     """
+    #     # Force build if input data is provided, but do it safely on CPU
+    #     if input_data is not None:
+    #         try:
+    #             # Force CPU execution to avoid GPU-specific XLA/libdevice errors
+    #             with tf.device('/CPU:0'):
+    #                 # We also disable JIT compilation globally for this build pass
+    #                 # to prevent searching for libdevice.10.bc
+    #                 _ = model(input_data, training=False)
+    #         except Exception as e:
+    #             print(f"[ERROR] Could not build model safely: {e}")
+    
+    #     # Helper to sum parameters for a specific component
+    #     def get_component_counts(obj):
+    #         if obj is None: return 0, 0
+    #         try:
+    #             trainable = int(np.sum([tf.keras.backend.count_params(w) for w in obj.trainable_weights]))
+    #             non_trainable = int(np.sum([tf.keras.backend.count_params(w) for w in obj.non_trainable_weights]))
+    #             return trainable, non_trainable
+    #         except Exception:
+    #             return 0, 0
+    
+    #     total_trainable, total_non_trainable = get_component_counts(model)
+        
+    #     print(f"\n{'='*45}")
+    #     print(f"REPORT FOR: {model_name}")
+    #     print(f"{'='*45}")
+    #     print(f"Total Trainable params:     {total_trainable:,}")
+    #     print(f"Total Non-trainable params: {total_non_trainable:,}")
+    #     print(f"Grand Total:               {total_trainable + total_non_trainable:,}")
+        
+    #     # Check specific sub-components if they exist
+    #     # 1. Encoder
+    #     if hasattr(model, 'Encoder_model'):
+    #         t, nt = get_component_counts(model.Encoder_model)
+    #         print(f"\n[Sub-Model] Encoder")
+    #         print(f"  - Trainable:     {t:,}")
+    #         if nt > 0: print(f"  - Non-trainable: {nt:,}")
+            
+    #     # 2. NN Decoder (Surrogate)
+    #     if hasattr(model, 'Decoder_NN'):
+    #         t, nt = get_component_counts(model.Decoder_NN)
+    #         print(f"\n[Sub-Model] NN Decoder")
+    #         if t == 0 and nt == 0:
+    #             print(f"  - [WARNING] Parameters are 0. Model is likely not 'built'.")
+    #         else:
+    #             print(f"  - Trainable:     {t:,}")
+    #             if nt > 0: print(f"  - Non-trainable: {nt:,}")
+                
+    #     # 3. Eigen Solver (Physics-based)
+    #     if hasattr(model, 'Eigen_solver'):
+    #         t, nt = get_component_counts(model.Eigen_solver)
+    #         print(f"\n[Sub-Model] Eigen Solver (Physics)")
+    #         print(f"  - Trainable:     {t:,} (Constant Physics)")
+    
+    #     print(f"{'='*45}\n")
+    #     return total_trainable
+
+    # # --- EXAMPLE USAGE ---
+    # sample_input = [Freqs_true_train[:1], Rotmodes_true_train[:1], Vertmodes_true_train[:1], alpha_factors_true_train[:1]]
+    # count_model_params(modelB, "VAE with NN Decoder", input_data=sample_input)
+        
+    

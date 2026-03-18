@@ -2,7 +2,8 @@ import tensorflow as tf
 from tensorflow.keras.layers import Layer
 import numpy as np
 
-# -------------------------------------------------------------------------
+
+
 # 1. VECTORIZED ASSEMBLY (Optimized & JIT Compiled)
 # -------------------------------------------------------------------------
 
@@ -73,7 +74,6 @@ def assemble_global_Kmatrices(Ke_matrices_dam, n_elements, num_samples, fixed_do
 # -------------------------------------------------------------------------
 # 2. ROBUST EIGENSOLVER LAYER (With Sign Consistency)
 # -------------------------------------------------------------------------
-
 @tf.function(jit_compile=True)
 def safe_eigh(tensor):
     return tf.linalg.eigh(tensor)
@@ -180,4 +180,23 @@ class Solve_eigenproblem(Layer):
         rot_modes = tf.transpose(rot_modes, perm=[0, 2, 1])
         
         return freqs_hz, rot_modes, vert_modes
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
