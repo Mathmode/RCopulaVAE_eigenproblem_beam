@@ -43,7 +43,8 @@ class Inverse_Copula_Model(tf.keras.Model):
         self.num_gaussians = num_gaussians
         self.num_samples = num_samples
         # High-dims architecture is preferred for 10 elements
-        self.FC_encoder = Fully_connected_enc_GC_highdims(input_dim_encoder, n_dims, num_gaussians, lbound)
+        self.FC_encoder = Fully_connected_enc_GC(input_dim_encoder, n_dims, num_gaussians, lbound)
+        # self.FC_encoder = Fully_connected_enc_GC_highdims(input_dim_encoder, n_dims, num_gaussians, lbound)
 
     def call(self, inputs):
         [freq_data, rot_modes_data, vert_modes_data, alpha_factors] = inputs
@@ -71,7 +72,7 @@ class Inverse_Copula_Model(tf.keras.Model):
         return means, scales, weights, offdiag, diag
 
 class My_CopulaVAE_withEigen(tf.keras.Model):
-    def __init__(self, input_dim, num_dofs, n_elements, n_modes, Ke_matrices, Mfree, L_inv, n_dims, num_gaussians, num_samples, beta, mean_f, std_f, lbound, fixed_dofs_indices=None, **kwargs):
+    def __init__(self, input_dim, num_dofs, n_elements, n_modes, Ke_matrices, Mfree, L_inv, n_dims, num_gaussians, num_samples, gamma, mean_f, std_f, lbound, fixed_dofs_indices=None, **kwargs):
         super(My_CopulaVAE_withEigen, self).__init__()
         self.num_dofs = num_dofs
         self.n_elements = n_elements
@@ -90,7 +91,7 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         self.num_gaussians = num_gaussians
         self.n_dims = n_dims
         self.num_samples = num_samples
-        self.beta = beta
+        self.gamma = gamma
         self.lbound = lbound 
 
     def call(self, inputs):
@@ -189,8 +190,8 @@ class My_CopulaVAE_withEigen(tf.keras.Model):
         m_term = self.Marginal_pdf_logprob(y_true, y_pred)  
         
         joint_logprob = tf.math.reduce_mean(c_term + m_term)
-        # Beta scaling
-        return tf.math.square(tf.cast(self.beta, dtype=tf.float32)) * joint_logprob
+        # Gamma scaling
+        return tf.math.square(tf.cast(self.gamma, dtype=tf.float32)) * joint_logprob
     
     def ELBO_Copula_loss(self, y_true, y_pred):
         """

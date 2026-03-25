@@ -6,15 +6,17 @@ Created on Fri Mar  8 13:50:58 2024
 @author: afernandez
 """
 import tensorflow as tf
-import time
-from sys import exit
+# from sys import exit
 import argparse
-import numpy as np 
 
-# from main_full import main
-from main_GCopula_GMM import main
-# from main_GCop_Betamixmarginals import main
+
+# from main_GCopula_GMM import main
 # from main_GCopula_Surrogate import main
+
+from main_GCop_KSmix import main
+
+# from main_MVNormal_VAE import main
+# 
 
 
 

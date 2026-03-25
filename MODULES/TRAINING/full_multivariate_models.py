@@ -15,30 +15,68 @@ from MODULES.TRAINING.full_multivariate_arch import  Fully_connected_enc, Fully_
 from tensorflow.keras.callbacks import ModelCheckpoint
 #%%%% ##################################################################################3
 
-@tf.function(jit_compile = True)
+@tf.function(jit_compile=True)
 def calculate_MAC(modes_true, modes_pred):
-    # TODO explain the function operations and translate to Keras
-    modes_true_transp = tf.einsum('BCM -> BMC', modes_true)
-    modes_pred_transp  = tf.einsum('BCM -> BMC', modes_pred)
+    """
+    Computes Modal Assurance Criterion (MAC) with improved stability.
+    Matches the implementation in GC_GMm_models.py.
+    """
+    eps = 1e-8
+    modes_true_norm = modes_true / (tf.norm(modes_true, axis=2, keepdims=True) + eps)
+    modes_pred_norm = modes_pred / (tf.norm(modes_pred, axis=2, keepdims=True) + eps)
+    
+    # Compute MAC Matrix
+    mac_matrix = tf.square(tf.matmul(modes_true_norm, modes_pred_norm, transpose_b=True))
+    return mac_matrix
+
+
+class TMVN_Encoder_Model(tf.keras.Model):
+    """
+    Simplified Encoder that predicts only Loc and Scale for a 
+    Truncated Normal distribution.
+    """
+    def __init__(self, input_dim_encoder, n_dims, lbound, **kwargs):
+        super(TMVN_Encoder_Model, self).__init__()
+        self.n_dims = n_dims
+        self.lbound = lbound
         
-    MAC_numer = tf.math.square(tf.einsum('BMC, BCM -> BM', modes_true_transp, modes_pred))
-    MAC_denom  = tf.multiply(tf.einsum('BMC, BCM -> BM', modes_true_transp, modes_true), tf.einsum('BMC, BCM -> BM', modes_pred_transp, modes_pred))
-    MAC = tf.divide(MAC_numer, MAC_denom)
-    #MAC dimension is (Batch_size, N_modes)
-    return MAC
+        # Using a similar depth to the original FC_encoder
+        self.net = K.Sequential([
+            K.layers.InputLayer(input_shape=(input_dim_encoder,)),
+            K.layers.Dense(256, activation='relu', kernel_initializer="he_uniform"),
+            K.layers.BatchNormalization(),
+            K.layers.Dense(256, activation='relu', kernel_initializer="he_uniform"),
+            K.layers.BatchNormalization(),
+            K.layers.Dense(128, activation='relu', kernel_initializer="he_uniform"),
+            K.layers.Dense(n_dims * 2) # [means, raw_scales]
+        ])
 
+    def call(self, inputs):
+        [freq_data, rot_modes_data, vert_modes_data, alpha_factors] = inputs
+        
+        # Preprocessing matching the original model
+        flat_rot = tf.reshape(rot_modes_data, [-1, rot_modes_data.shape[1] * rot_modes_data.shape[2]])
+        flat_vert = tf.reshape(vert_modes_data, [-1, vert_modes_data.shape[1] * vert_modes_data.shape[2]])
+        modal_data = K.layers.Concatenate(axis=1)([freq_data, flat_vert, flat_rot])
 
+        params = self.net(modal_data)
+        means_raw, scales_raw = tf.split(params, 2, axis=-1)
 
-
+        # Map means to [lbound, 1] similar to GC_GMm_architectures.py
+        means = self.lbound + (1.0 - self.lbound) * tf.nn.sigmoid(means_raw)
+        
+        # Softplus ensures positive scales (standard deviations)
+        scales = tf.nn.softplus(scales_raw) + 1e-5
+        
+        return means, scales
+    
 class Inverse_Bayesian_GMM_Model(K.Model):
-    def __init__(self, input_dim_encoder, n_dims, num_gaussians, num_samples, s_lb, s_ub, **kwargs):
+    def __init__(self, input_dim_encoder, n_dims, num_gaussians, num_samples, **kwargs):
         super(Inverse_Bayesian_GMM_Model, self).__init__()
         self.n_dims = n_dims
         self.num_gaussians = num_gaussians
         self.num_samples = num_samples
-        self.s_lb = s_lb #lower bound for the damaged condition features (in this case i guess it will be [0,1])
-        self.s_ub = s_ub #Upper bound for the damaged condition features
-        self.FC_encoder = Fully_connected_gmm_inverse(input_dim_encoder, n_dims, num_gaussians, s_lb, s_ub)
+        self.FC_encoder = Fully_connected_gmm_inverse(input_dim_encoder, n_dims, num_gaussians)
 
     def call(self, inputs):
         [self.freq_data, self.rot_modes_data, self.vert_modes_data, self.alpha_factors] = inputs
@@ -64,7 +102,7 @@ class Inverse_Bayesian_GMM_Model(K.Model):
 
 # @tf.function(jit_compile = True)
 class My_Bayesian_InverseForward_withEigen(tf.keras.Model):
-    def __init__(self, input_dim, num_dofs, n_elements, n_modes, Ke_matrices, Mfree, L_inv, epsi, batch_size, n_dims, num_gaussians, num_samples, beta, full_cov, s_lb, s_ub, **kwargs): #We add the bayesian properties (gaussians, dimensions of the latent and samples, selected_features(in case you want to work with only freqs) beta, full_cov, s_lb, s_ub)
+    def __init__(self, input_dim, num_dofs, n_elements, n_modes, Ke_matrices, Mfree, L_inv, batch_size, n_dims, num_gaussians, num_samples, beta, full_cov, mean_f, std_f, lbound, **kwargs): #We add the bayesian properties (gaussians, dimensions of the latent and samples, selected_features(in case you want to work with only freqs) beta, full_cov, s_lb, s_ub)
         super(My_Bayesian_InverseForward_withEigen, self).__init__()
         self.num_dofs = num_dofs
         self.n_elements = n_elements
@@ -72,16 +110,19 @@ class My_Bayesian_InverseForward_withEigen(tf.keras.Model):
         self.Ke_matrices = Ke_matrices # Known baseline element stiffness matrix (4x4 in 2d beam elements with vcal and rot bending modes)
         self.Mfree = Mfree
         self.L_inv = L_inv
-        self.Bayesian_encoder = Inverse_Bayesian_GMM_Model(input_dim, n_dims,num_gaussians, num_samples,s_lb, s_ub)
+        self.Encoder_model = TMVN_Encoder_Model(input_dim, n_dims, lbound)
+        self.Bayesian_encoder = Inverse_Bayesian_GMM_Model(input_dim, n_dims,num_gaussians, num_samples)
         self.Eigen_solver = Solve_eigenproblem(num_dofs, n_modes, Mfree, L_inv)
         self.gmm_sampling = Mixture_pdf_layer(n_dims, num_gaussians, num_samples, full_cov)
         # self.global_indices = tf.cast(new_generate_indices(n_elements), dtype = 'int64')
-        self.epsi = epsi #wight factor for the regularization term in the loss 
         self.num_gaussians = num_gaussians
         self.n_dims = n_dims
         self.num_samples = num_samples
         self.beta = beta
         self.full_cov = full_cov
+        self.mean_freq = tf.constant(mean_f, dtype=tf.float32) 
+        self.std_freq = tf.constant(std_f, dtype=tf.float32)
+        self.lbound = lbound 
             
     def call(self, inputs):
         # Original shapes before flattening: 
@@ -89,11 +130,7 @@ class My_Bayesian_InverseForward_withEigen(tf.keras.Model):
         # vert_modes_data size: (Batch_size, free displ. coordinates, n_modes)
         # rot_modes_data size: (Batch_size, free rot. coordinates, n_modes)
         [self.freq_data, self.rot_modes_data, self.vert_modes_data, self.alpha_factors] = inputs
-        #We now flatten the modeshapes to feed the Inverse DNN with a vector that contains all the frequencies and mode shapes.         
-        self.flat_rot_modes = tf.reshape(self.rot_modes_data, [-1, self.rot_modes_data.shape[1]* self.rot_modes_data.shape[2]])
-        self.flat_vert_modes = tf.reshape(self.vert_modes_data, [-1, self.vert_modes_data.shape[1]* self.vert_modes_data.shape[2]])
-        self.modal_data = K.layers.Concatenate(axis=1)([self.freq_data, self.flat_vert_modes, self.flat_rot_modes])
-
+       
         self.GMM_props = self.Bayesian_encoder(inputs) #Delivers the means, sigmas, weights and angles
         self.means, self.sigmas, self.weights_values, self.alpha_angles = tf.split(self.GMM_props, [self.n_dims * self.num_gaussians,
                                                         self.n_dims * self.num_gaussians,
@@ -130,31 +167,25 @@ class My_Bayesian_InverseForward_withEigen(tf.keras.Model):
         return  reshaped_alpha_factors
         
     def Freqs_loss(self, y_true, y_pred):
-        true_freqs = self.freq_data
-        pred_freqs = self.pred_freqs
-        Freqs_sq_error = tf.square(tf.math.log(true_freqs) - tf.math.log(pred_freqs))
-        Loss_freqs = tf.math.reduce_mean(Freqs_sq_error, axis = None)
-        return Loss_freqs
+        """ Robust Frequency Loss using Huber Loss. """
+        true_scaled = self.freq_data
+        pred_hz = tf.abs(self.pred_freqs)
+        pred_log = tf.math.log(tf.maximum(pred_hz, 1e-7))
+        pred_scaled = (pred_log - self.mean_freq) / (self.std_freq + 1e-8)
+        
+        return tf.keras.losses.Huber(delta=1.0)(true_scaled, pred_scaled)
     
 
     def MAC_modes_loss(self, y_true, y_pred):
-        true_rotmodes, true_vertmodes  = self.rot_modes_data, self.vert_modes_data
-        pred_rotmodes, pred_vertmodes = self.pred_rotmodes, self.pred_vertmodes
-        #Calculate the MACs
-        Rot_MACs = calculate_MAC(true_rotmodes, pred_rotmodes) #shape: (Batch_Size, n_modes)
-        Vert_MACs = calculate_MAC(true_vertmodes, pred_vertmodes) #shape: (Batch_size, n_modes)
-        # MACs = K.ops.hstack((Rot_MACs, Vert_MACs))
-        MACs = tf.concat([Rot_MACs, Vert_MACs], axis=1)
-        neg_MACs = 1 - MACs
-        Loss_MAC = tf.math.reduce_mean(neg_MACs, axis  = None)
-        
-        return Loss_MAC 
-    
-    def Alpha_regularizer(self, y_true, y_pred):
-        min_value = tf.reduce_min(y_pred, axis=-1, keepdims=False)
-        Regularizer = tf.math.reduce_mean( tf.math.reduce_sum(y_pred,axis = -1)-min_value)/(y_pred.shape[-1])-1
-        return self.epsi*Regularizer
-    
+        """ Stabilized MAC loss with best-match logic. """
+        def get_match_loss(t_group, p_group):
+            mac_mat = calculate_MAC(t_group, p_group)
+            best_matches = tf.reduce_max(mac_mat, axis=2)
+            return tf.reduce_mean(1.0 - best_matches) 
+
+        loss_rot = get_match_loss(self.rot_modes_data, self.pred_rotmodes)
+        loss_vert = get_match_loss(self.vert_modes_data, self.pred_vertmodes)
+        return loss_rot + loss_vert 
     
     def Mixture_dens_term(self, y_true, y_pred):
         # Este termino tiene que ver con la mixtura que estimamos a traves de nuestro INVERSE. 
@@ -172,13 +203,11 @@ class My_Bayesian_InverseForward_withEigen(tf.keras.Model):
     def total_loss_with_regularizer(self, y_true, y_pred):    
         Loss_freqs = self.Freqs_loss(y_true,y_pred)
         Loss_MAC = self.MAC_modes_loss(y_true,y_pred)
-        Regularizer = self.Alpha_regularizer(y_true, y_pred)
         Mixture_loss = self.Mixture_dens_term(y_true,y_pred)
         
-        return  Loss_MAC + Loss_freqs - Regularizer + Mixture_loss
+        return  Loss_MAC + Loss_freqs + Mixture_loss
     
 
-    
     
     ## use this custom loss when you want to debug the second part of the code (the eigenvalue problem)
     def custom_loss(self,y_true, y_pred):

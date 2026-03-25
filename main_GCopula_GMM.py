@@ -64,16 +64,16 @@ def main():
     K.backend.set_floatx('float32')
     
     # --- 2. DATA LOADING ---
-    # data_folder = "01Mar2026_Noisy_E5_level25"
-    data_folder = "16Mar2026_Noisy_E10_level25_5modes"
+    data_folder = "01Mar2026_Noisy_E5_level25"
+    # data_folder = "16Mar2026_Noisy_E10_level25_5modes"
 
     data_path = os.path.join("Data", data_folder)
     
-    n_elements = 10
+    n_elements = 5
     n_dofs = 2 * (n_elements + 1) 
     lbound = 0.45 
     fixed_dofs_indices = [0, n_dofs - 2]
-    batch_size = 512
+    batch_size = 256
     
     
     print(f"Loading data from {data_path}...")
@@ -91,15 +91,15 @@ def main():
     
     n_modes = Freqs_true_train.shape[1]
     n_nodes = Rotmodes_true_train.shape[2]
-    n_epochs = 50000
+    n_epochs = 10000
     base_lr = 1e-5
     num_gaussians = 1
     n_dims = alpha_factors_true_train.shape[1]
     num_samples = 1 
-    beta = 0.3
+    gamma = 0.3
     
     # Output Directory
-    filename = f"20MarHD_{n_elements}Els_{n_modes}modes_Nosiy2.5_{lbound}lbound_Beta{beta}_{n_epochs}Epochs"
+    filename = f"F22MarHD_{n_elements}Els_{n_modes}modes_Nosiy2.5_{lbound}lbound_Gamma{gamma}_{n_epochs}Epochs_lr{base_lr}"
     folder_path = os.path.join('Output', "Gaussian_Copula", filename)
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
@@ -112,7 +112,7 @@ def main():
         input_dim=input_dim, num_dofs=n_dofs, n_elements=n_elements,
         n_modes=n_modes, Ke_matrices=Ke_matrices, Mfree=Mfree,
         L_inv=L_inv, n_dims=n_dims, num_gaussians=num_gaussians,
-        num_samples=num_samples, beta=beta, mean_f=mean_f,
+        num_samples=num_samples, gamma=gamma, mean_f=mean_f,
         std_f=std_f, lbound=lbound, fixed_dofs_indices=fixed_dofs_indices
     )
     
@@ -123,7 +123,7 @@ def main():
         decay_steps=10000,
         decay_rate=0.9
     )
-    optim = K.optimizers.Adam(learning_rate=lr_schedule, clipnorm=0.5)
+    optim = K.optimizers.Adam(learning_rate=base_lr, clipnorm=0.5)
     
         
     # Capture INITIAL weights for verification
@@ -133,7 +133,6 @@ def main():
     print(f"Initial Encoder Weight Sum: {initial_weights_sum:.6f}")
          
     # --- 4. COMPILATION ---
-    # optim = K.optimizers.Adam(learning_rate=base_lr, clipnorm=1.0)
     run_eagerly = False
     model.compile(
         optimizer=optim, 
@@ -147,7 +146,7 @@ def main():
     print("Starting Training...")
     # ---  CALLBACKS SETUP ---
     # Define the delayed stopping: start after 10k epochs, wait 1k epochs for improvement
-    delayed_stop = DelayedEarlyStopping(patience=1000, start_epoch=10000)
+    delayed_stop = DelayedEarlyStopping(patience=5000, start_epoch=10000)
     
     model_history = model.fit(
         x=[Freqs_true_train, Rotmodes_true_train, Vertmodes_true_train, alpha_factors_true_train],
@@ -178,7 +177,7 @@ def main():
     
     # --- 7. SAVING RESULTS ---    
     Problem_info = {'input_dim_enc': input_dim, 'n_dims': n_dims, 'n_gaussians': num_gaussians, 
-                    'n_samples': num_samples, 'epochs': n_epochs, 'beta': beta, 'std_f':std_f, 'mean_f':mean_f}
+                    'n_samples': num_samples, 'epochs': n_epochs, 'gamma': gamma, 'std_f':std_f, 'mean_f':mean_f}
     np.save(os.path.join(folder_path, 'Problem_info.npy'), Problem_info, allow_pickle=True)
     np.save(os.path.join(folder_path, 'model_history.npy'), model_history.history, allow_pickle=True)   
     Test_predicted_properties = {'test_means': test_means, 'test_scales': test_scales, 'test_offdiag_elems': test_offdiag_elems, 

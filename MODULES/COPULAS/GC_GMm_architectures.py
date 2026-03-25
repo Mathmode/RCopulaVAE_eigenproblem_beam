@@ -84,12 +84,12 @@ def Fully_connected_enc_GC_highdims(input_dim, n_dims, num_gaussians, lbound):
     input1 = K.Input(shape=(input_dim,), name='Innnputlayer')
     
     # Layer 1
-    x = K.layers.Dense(256, kernel_initializer="he_uniform", name='dense_1')(input1)
+    x = K.layers.Dense(1024, kernel_initializer="he_uniform", name='dense_1')(input1)
     x = K.layers.BatchNormalization()(x)
     x = K.layers.Activation('relu')(x)
     
     # Layer 2
-    x = K.layers.Dense(256, kernel_initializer="he_uniform", name='dense_2')(x)
+    x = K.layers.Dense(512, kernel_initializer="he_uniform", name='dense_2')(x)
     x = K.layers.BatchNormalization()(x)
     x = K.layers.Activation('relu')(x)
     x = K.layers.Dropout(0.1)(x)

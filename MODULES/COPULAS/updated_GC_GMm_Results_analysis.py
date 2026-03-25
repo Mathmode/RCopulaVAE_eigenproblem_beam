@@ -23,7 +23,7 @@ from MODULES.COPULAS.updated_GC_GMm_functions_for_results_analysis import calcul
 from MODULES.COPULAS.GC_Gm_uncertainty_quantification import calculate_and_plot_calibration_curve, calculate_multivariate_mahalanobis, plot_error_vs_confidence
 
 # --- Config ---
-filename = "19MarHD_10Els_5modes_Nosiy2.5_0.45lbound_Beta0.35_50000Epochs"
+filename = "F22MarHD_10Els_5modes_Nosiy2.5_0.45lbound_Beta0.5_50000Epochs_lr1e-05"
 folder_path = os.path.join('Output', 'Gaussian_Copula', filename)
 lbound = 0.45
 # Load Problem Info
@@ -54,55 +54,9 @@ print("training time (hours):", training_time/3600.)
 
 
 history_ = np.load(os.path.join(folder_path, "model_history.npy"),allow_pickle = True)
-def plot_trainval_loss(history, folder_path):
-    """
-    Plots the training and validation evolution for the GC-VAE.
-    Uses Matplotlib's internal mathtext for labels to avoid external LaTeX dependencies.
-    """
-    # Use a style suitable for academic publishing without requiring external LaTeX
-    plt.rcParams.update({
-        "text.usetex": False, # Set to False to resolve 'latex could not be found' error
-        "font.family": "serif",
-        "font.size": 12,
-        "mathtext.fontset": "cm" # Use Computer Modern for a LaTeX-like look
-    })
-    
-    trainvalloss_plot_fig = plt.figure(figsize=(8, 6))
-    
-    # Axis scales
-    plt.yscale('log')
-    plt.xscale('log')
-    
-    # Plotting data
-    plt.plot(history.item()['loss'], 
-             color='black', 
-             linewidth=1.5, 
-             linestyle='--', 
-             label=r'Train loss ($\mathcal{L}_{\mathrm{ELBO}}^{\text{train}}$)')
-    
-    plt.plot(history.item()['val_loss'], 
-             color='darkgray', 
-             linewidth=1.5, 
-             label=r'Validation loss ($\mathcal{L}_{\mathrm{ELBO}}^{\text{val}}$)')
-    
-    # Labels and Legend
-    plt.xlabel('Epochs', fontsize=14)
-    plt.ylabel(r'$\mathcal{L}_{\mathrm{ELBO}}$ (log scale)', fontsize=14)
-    plt.legend(loc='upper right', fontsize=12, frameon=True)
-    
-    # Grid and layout
-    plt.grid(True, which="both", linestyle='-.', alpha=0.5)
-    plt.tight_layout()
-    
-    # Save with high resolution
-    trainvalloss_plot_fig.savefig(
-        os.path.join(folder_path, 'TrainVal_lossevolution.png'),
-        dpi=500, 
-        bbox_inches='tight'
-    )
-    # plt.close()
+from MODULES.POSTPROCESSING.plot_losses import plot_trainval_loss, plot_freqsMACs_loss
 plot_trainval_loss(history_, folder_path)
-   
+plot_freqsMACs_loss(history_, folder_path)
 
 
 # %% 1. Initialization and Data Loading
@@ -188,20 +142,23 @@ print(f"Metrics saved to: {metrics_save_path}")
 #         969,  383,  246,  510, 1455, 1586, 1776, 1787, 1100,  293, 1530,
 #        1219,  743, 1163,  640,  745,  336,    3, 1282, 1299,  908,  459,
 #         371, 1643, 1489, 1038, 1267,  455]
-positions = [11,34, 48,63,77,78,91,219,1178]
-n_samples = 4096
-N_test_samples = len(Freqs_true_test)
 
-for pos in positions:
-    if pos < N_test_samples:        
-        plot_results_PDF_uncertainty(fixed_dofs, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
-                                         predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, lbound, folder_path)
+
+# # positions = [1,17,25,48,63,77,219,300,305,313,314,315,612,1489]
+# positions = [34,63,77,219,1178]
+# n_samples = 4096
+# N_test_samples = len(Freqs_true_test)
+
+# for pos in positions:
+#     if pos < N_test_samples:        
+#         plot_results_PDF_uncertainty(fixed_dofs, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
+#                                          predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, lbound, folder_path)
         
         
-        # z_true, z_samples, posterior_weights = calculate_posterior_PDF_info(fixed_dofs, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
-        #                                  predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, lbound, folder_path)
-
-        # plot_physical_pdf_profile(z_samples, posterior_weights, z_true, n_elements, pos, folder_path)
+#         z_true, z_samples, posterior_weights = calculate_posterior_PDF_info(fixed_dofs, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
+#                                          predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, lbound, folder_path)
+#         print(z_true)
+#         # plot_physical_pdf_profile(z_samples, posterior_weights, z_true, n_elements, pos, folder_path)
         
 
 

@@ -197,17 +197,17 @@ class Mixture_pdf_layer(tf.keras.layers.Layer):
 
     
 
-def Fully_connected_gmm_inverse(input_dim, num_dimensions, num_gaussians, s_lb, s_ub):
+def Fully_connected_gmm_inverse(input_dim, num_dimensions, num_gaussians):
     n_angles = num_dimensions*(num_dimensions-1)//2
     
     input1 = K.Input(shape =(input_dim,), name = 'Innnputlayer')
-    lay1 = K.layers.Dense(100, activation = 'relu', name = 'lay1')(input1) #Intermediate layers
-    lay2 = K.layers.Dense(250, activation = 'relu', kernel_initializer="he_uniform", bias_initializer="zeros", name = 'lay2')(lay1) #Intermediate layers
-    lay2 = K.layers.Dense(300, activation = 'tanh')(lay2) #Intermediate layers
+    lay1 = K.layers.Dense(256, activation='relu', kernel_initializer="he_uniform")(input1) #Intermediate layers
+    lay2 = K.layers.Dense(256, activation = 'relu', kernel_initializer="he_uniform", bias_initializer="zeros", name = 'lay2')(lay1) #Intermediate layers
+    # lay2 = K.layers.Dense(300, activation = 'tanh')(lay2) #Intermediate layers
     # lay2 = K.layers.Dense(300, activation = 'relu', kernel_initializer="he_uniform", bias_initializer="zeros", )(lay2) #Intermediate layers
     # lay2 = K.layers.Dense(200, activation = 'tanh')(lay2) #Intermediate layers
-    lay3 = K.layers.Dense(150, activation = 'relu', kernel_initializer="he_uniform", bias_initializer="zeros", name = 'lay3')(lay2) #Intermediate layers
-    lay4 = K.layers.Dense(100, activation = 'tanh', name = 'lay4')(lay3) #Intermediate layers
+    # lay3 = K.layers.Dense(150, activation = 'relu', kernel_initializer="he_uniform", bias_initializer="zeros", name = 'lay3')(lay2) #Intermediate layers
+    lay4 = K.layers.Dense(128,  activation='relu', kernel_initializer="he_uniform", name = 'lay4')(lay2) #Intermediate layers
     means = K.layers.Dense(num_dimensions*num_gaussians, activation = 'sigmoid',  name = 'means')(lay4)
     sigmas = K.layers.Dense(num_dimensions*num_gaussians, activation = 'softplus', name = 'sigmas')(lay4)
     # sigmas = ClipLayer(s_lb, s_ub)(sigmas)
