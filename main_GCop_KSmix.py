@@ -76,14 +76,14 @@ def main():
                  (Vertmodes_true_train.shape[1] * Vertmodes_true_train.shape[2]))
     
     n_modes = Freqs_true_train.shape[1]
-    n_epochs = 800
-    base_lr = 1e-5
-    num_KS = 2  # Number of Kumaraswamy components
+    n_epochs = 10000
+    base_lr = 1e-6
+    num_KS = 5  # Number of Kumaraswamy components
     n_dims = alpha_factors_true_train.shape[1]
     num_samples = 1 
-    gamma = 0.45
+    gamma = 0.4
     
-    filename = f"25Mar_KS_Copula_{n_elements}Els_{num_KS}KSmix_Gamma{gamma}_LR{base_lr}_{n_epochs}epoch"
+    filename = f"27Mar_increasedbouds_KSmixGCopula_{n_elements}Els_{num_KS}KSmix_Gamma{gamma}_LR{base_lr}_{n_epochs}epoch"
     folder_path = os.path.join('Output', "KS_Copula", filename)
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
@@ -111,7 +111,7 @@ def main():
     # --- TRAINING ---
     start_time = time.time()
     print("Starting Kumaraswamy Copula Training...")
-    delayed_stop = DelayedEarlyStopping(patience=1000, start_epoch=10000)
+    delayed_stop = DelayedEarlyStopping(patience=500, start_epoch=5000)
     
     model_history = model.fit(
         x=[Freqs_true_train, Rotmodes_true_train, Vertmodes_true_train, alpha_factors_true_train],

@@ -16,6 +16,7 @@ import tensorflow.keras as K
 import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 import matplotlib.lines as mlines
+from scipy.special import beta as beta_func
 
 K.backend.set_floatx('float32') 
 
@@ -132,26 +133,99 @@ def physics_engine_step(K_batch, L_inv_tf, n_modes, free_dofs, n_dofs):
 
 from MODULES.COPULAS.GC_GMm_GPU_eigen_functions import assemble_global_Kmatrices
 
-def calculate_testing_metrics(predicted_stats, test_datasets, lbound=0.45):
-    """Calculates metrics using point estimates derived from KS mixture sampling."""
-    a = predicted_stats['test_a'] 
-    b = predicted_stats['test_b']
-    weights = predicted_stats['test_weights']
-    z_true = test_datasets['alpha_factors_true_test']
+def calculate_ks_mixture_metrics(predicted_stats, test_datasets, lbound=0.45):
+    """
+    Calculates numerical metrics to evaluate the GC-VAE (Kumaraswamy Mixture) inference.
     
-    n_samples_for_metrics = 500
-    means_pred = []
-    print("Estimating point estimates for metrics calculation...")
-    for i in range(len(z_true)):
-        u = tf.random.uniform((n_samples_for_metrics, z_true.shape[1]))
-        z_s = kumaraswamy_mixture_quantile(u, a[i], b[i], weights[i], lbound=lbound)
-        means_pred.append(np.mean(z_s.numpy(), axis=0))
+    Shapes (Corrected):
+    - test_a, test_b, test_weights: [n_samples, num_KS, n_dims] (e.g., [1808, 3, 5])
+    - z_true: [n_samples, n_dims] (e.g., [1808, 5])
+    """
+    # Unpack params
+    test_a = predicted_stats['test_a']           # [N, 3, 5]
+    test_b = predicted_stats['test_b']           # [N, 3, 5]
+    test_weights = predicted_stats['test_weights'] # [N, 3, 5]
+    z_true = test_datasets['alpha_factors_true_test'] # [N, 5]
     
-    means_pred = np.array(means_pred)
-    mse = np.mean(np.square(means_pred - z_true))
-    mae = np.mean(np.abs(means_pred - z_true))
+    n_samples, num_KS, n_dims = test_a.shape
     
-    return {'MSE': mse, 'MAE': mae}
+    # --- 1. Point Estimate (Analytical Mean of Mixture) ---
+    def ks_mean_func(a, b):
+        return b * beta_func(1 + 1/a, b)
+
+    # Calculate mean for every individual component: [N, 3, 5]
+    comp_means = ks_mean_func(test_a, test_b) 
+    
+    # Weighted mean across the mixture dimension (axis=1)
+    # Result shape: [N, 5]
+    predicted_means_unit = np.sum(test_weights * comp_means, axis=1)
+    
+    # Map from unit space [0, 1] to physical space [lbound, 1.0]
+    predicted_means = lbound + (1.0 - lbound) * predicted_means_unit
+    
+    # Shapes match: [N, 5] vs [N, 5]
+    mse = np.mean(np.square(predicted_means - z_true))
+    mae = np.mean(np.abs(predicted_means - z_true))
+
+    # --- 2. Uncertainty Calibration (95% Credible Intervals) ---
+    grid = np.linspace(0, 1, 1000)
+    z_lower = np.zeros((n_samples, n_dims))
+    z_upper = np.zeros((n_samples, n_dims))
+    
+    # Grid search for quantiles per dimension per sample
+    for i in range(n_samples):
+        for d in range(n_dims):
+            a_vec = test_a[i, :, d] # [3] - components for this dimension
+            b_vec = test_b[i, :, d] # [3]
+            w_vec = test_weights[i, :, d] # [3]
+            
+            # Broadcast grid [1000, 1] with params [1, 3] to get [1000, 3]
+            comp_cdfs = 1.0 - np.power(1.0 - np.power(grid[:, None], a_vec), b_vec)
+            # Sum weighted components to get mixture CDF [1000]
+            mix_cdf = np.sum(w_vec * comp_cdfs, axis=1)
+            
+            z_lower[i, d] = grid[np.searchsorted(mix_cdf, 0.025)]
+            z_upper[i, d] = grid[np.searchsorted(mix_cdf, 0.975)]
+
+    # Map intervals to physical space
+    z_lower_phys = lbound + (1.0 - lbound) * z_lower
+    z_upper_phys = lbound + (1.0 - lbound) * z_upper
+    
+    covered = (z_true >= z_lower_phys) & (z_true <= z_upper_phys)
+    coverage_score = np.mean(covered)
+    sharpness = np.mean(z_upper_phys - z_lower_phys)
+
+    # --- 3. Probabilistic Log-Likelihood ---
+    z_true_unit = (z_true - lbound) / (1.0 - lbound)
+    z_true_unit = np.clip(z_true_unit, 1e-6, 1.0 - 1e-6)
+    
+    log_probs = []
+    for i in range(n_samples):
+        # z_val: [5], a_k/b_k/w_k: [3, 5]
+        z_val = z_true_unit[i] # [5]
+        a_k = test_a[i] # [3, 5]
+        b_k = test_b[i] # [3, 5]
+        w_k = test_weights[i] # [3, 5]
+        
+        # PDF calculation: Use broadcasting between z_val [5] and params [3, 5]
+        # pdf_comps result: [3, 5]
+        pdf_comps = w_k * a_k * b_k * np.power(z_val, a_k - 1) * np.power(1.0 - np.power(z_val, a_k), b_k - 1)
+        pdf_mix = np.sum(pdf_comps, axis=0) # [5] - sum over mixture components
+        log_probs.append(np.mean(np.log(pdf_mix + 1e-12)))
+
+    avg_log_prob = np.mean(log_probs)
+
+    metrics = {
+        'MSE': mse,
+        'MAE': mae,
+        '95% Coverage': coverage_score,
+        'Mean Interval Width': sharpness,
+        'Avg Log-Likelihood': avg_log_prob
+    }
+    
+    return metrics, covered
+
+
 
 def plot_results_PDF_uncertainty(fixed_dofs_indices, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
                                  predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, lbound, folder_path):

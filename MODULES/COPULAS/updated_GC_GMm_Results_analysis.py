@@ -23,7 +23,7 @@ from MODULES.COPULAS.updated_GC_GMm_functions_for_results_analysis import calcul
 from MODULES.COPULAS.GC_Gm_uncertainty_quantification import calculate_and_plot_calibration_curve, calculate_multivariate_mahalanobis, plot_error_vs_confidence
 
 # --- Config ---
-filename = "F22MarHD_10Els_5modes_Nosiy2.5_0.45lbound_Beta0.5_50000Epochs_lr1e-05"
+filename = "22Mar_5Els_5modes_Nosiy2.5_0.45lbound_Beta0.3_50000Epochs_lr1e-05"
 folder_path = os.path.join('Output', 'Gaussian_Copula', filename)
 lbound = 0.45
 # Load Problem Info
@@ -38,9 +38,9 @@ n_dims = info['n_dims']
 beta = info['beta']
 mean_freq = info['mean_f']
 std_freq = info['std_f']
-n_elements = 10
+n_elements = 5
 n_dofs = 2 * (n_elements + 1)
-batch_size = 512
+batch_size = 256
 
 # 2. Identify fixed indices (Simply Supported)
 # Node 0 vertical is index 0; Node N vertical is index 10
@@ -61,8 +61,8 @@ plot_freqsMACs_loss(history_, folder_path)
 
 # %% 1. Initialization and Data Loading
 K.utils.set_random_seed(1234)
-# data_path = os.path.join("Data", "01Mar2026_Noisy_E5_level25")
-data_path = os.path.join("Data", "16Mar2026_Noisy_E10_level25_5modes")
+data_path = os.path.join("Data", "01Mar2026_Noisy_E5_level25")
+# data_path = os.path.join("Data", "16Mar2026_Noisy_E10_level25_5modes")
 
 print(f"Loading data from {data_path}...")
 

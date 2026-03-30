@@ -19,15 +19,31 @@ from MODULES.KUMARSWAMY.GC_KSmix_architectures import Fully_connected_enc_GC_KS,
 # HELPER FUNCTIONS
 # -------------------------------------------------------------------------
 
+# @tf.function(jit_compile=True)
+# def calculate_MAC(modes_true, modes_pred):
+#     """Computes Modal Assurance Criterion (MAC) with improved stability."""
+#     eps = 1e-8
+#     modes_true_norm = modes_true / (tf.norm(modes_true, axis=2, keepdims=True) + eps)
+#     modes_pred_norm = modes_pred / (tf.norm(modes_pred, axis=2, keepdims=True) + eps)
+#     mac_matrix = tf.square(tf.matmul(modes_true_norm, modes_pred_norm, transpose_b=True))
+#     return mac_matrix
+
+# stabilized version for MAC calculation
 @tf.function(jit_compile=True)
 def calculate_MAC(modes_true, modes_pred):
-    """Computes Modal Assurance Criterion (MAC) with improved stability."""
+    """Computes MAC with higher epsilon and clipping to prevent NaN gradients."""
     eps = 1e-8
-    modes_true_norm = modes_true / (tf.norm(modes_true, axis=2, keepdims=True) + eps)
-    modes_pred_norm = modes_pred / (tf.norm(modes_pred, axis=2, keepdims=True) + eps)
-    mac_matrix = tf.square(tf.matmul(modes_true_norm, modes_pred_norm, transpose_b=True))
+    # Normalize with safety
+    t_n = tf.norm(modes_true, axis=2, keepdims=True) + eps
+    p_n = tf.norm(modes_pred, axis=2, keepdims=True) + eps
+    
+    modes_true_norm = modes_true / t_n
+    modes_pred_norm = modes_pred / p_n
+    
+    # MAC calculation
+    dot_product = tf.matmul(modes_true_norm, modes_pred_norm, transpose_b=True)
+    mac_matrix = tf.square(tf.clip_by_value(dot_product, -1.0, 1.0))
     return mac_matrix
-
 # -------------------------------------------------------------------------
 # INVERSE MODEL (ENCODER)
 # -------------------------------------------------------------------------
@@ -58,12 +74,15 @@ class Inverse_Copula_KS_Model(tf.keras.Model):
             self.n_dims                 
         ], axis=-1)
 
-        a_ks = tf.reshape(a_ks, (-1, self.num_KS, self.n_dims))
-        b_ks = tf.reshape(b_ks, (-1, self.num_KS, self.n_dims))
-        weights = tf.reshape(weights, (-1, self.num_KS, self.n_dims))
-        weights = tf.nn.softmax(weights, axis=1) + 1e-8
-        weights = weights / tf.reduce_sum(weights, axis=1, keepdims=True)
+        a_ks = tf.reshape(a_ks, (-1, self.num_KS, self.n_dims))+1.1
+        b_ks = tf.reshape(b_ks, (-1, self.num_KS, self.n_dims))+1.1
+        # weights = tf.reshape(weights, (-1, self.num_KS, self.n_dims))
+        # weights = tf.nn.softmax(weights, axis=1) + 1e-8
+        # weights = weights / tf.reduce_sum(weights, axis=1, keepdims=True)
         
+        # 2. (REVISED) Temperature-scaled softmax for weights to prevent sparsity too early
+        weights = tf.reshape(weights, (-1, self.num_KS, self.n_dims))
+        weights = tf.nn.softmax(weights / 1.5, axis=1) 
         
         return a_ks, b_ks, weights, offdiag, diag
 
@@ -94,8 +113,6 @@ class My_CopulaKSVAE_withEigen(tf.keras.Model):
         self.gamma = gamma
         self.lbound = lbound 
 
-        # Huber loss for frequency stability
-        self.huber_loss = tf.keras.losses.Huber(delta=1.0)
 
     def call(self, inputs):
         [self.freq_data, self.rot_modes_data, self.vert_modes_data, self.z_factors] = inputs
@@ -167,7 +184,7 @@ class My_CopulaKSVAE_withEigen(tf.keras.Model):
     
   
     def Copula_pdf_logprob(self, y_true, y_pred):
-        u_clipped = tf.clip_by_value(self.reshaped_copula_samples, 1e-5, 1.0 - 1e-5)
+        u_clipped = tf.clip_by_value(self.reshaped_copula_samples, 1e-4, 1.0 - 1e-4)
         normal_samples = tfd.Normal(loc=0.0, scale=1.0).quantile(u_clipped)
         
         # Build LT matrices for the samples
@@ -243,16 +260,26 @@ class My_CopulaKSVAE_withEigen(tf.keras.Model):
         # We minimize -Entropy to maximize diversity
         return -mean_entropy
     
+    def Boundary_Penalty_loss(self):
+        """
+        Custom penalty to prevent samples from being pushed exactly to 
+        lbound or 1.0, which causes the PDF collapse you observed.
+        """
+        x = (self.reshaped_z_samples - self.lbound) / (1.0 - self.lbound)
+        # Logarithmic barrier: increases as x -> 0 or x -> 1
+        penalty = -tf.reduce_mean(tf.math.log(x + 1e-4) + tf.math.log(1.0 - x + 1e-4))
+        return penalty
     
     def ELBO_Copula_loss(self, y_true, y_pred):
         Loss_freqs = self.Freqs_loss(y_true, y_pred)
         Loss_MAC = self.MAC_modes_loss(y_true, y_pred)
         # Diversity term: Encourage the model to use all Kumaraswamy components
         Loss_mix_diveristy = self.Mixture_Diversity_loss()
-        
-        # NLL Term (Minimize -LogProb)
+        Loss_boundary = self.Boundary_Penalty_loss()
+
+
         Joint_copula_nll = self.Joint_copula_dens_term(y_true, y_pred)
-        ELBO_loss = Loss_freqs + 10.0 * Loss_MAC + Joint_copula_nll + 0.1*Loss_mix_diveristy
+        ELBO_loss = 5.*Loss_freqs + 10.0 * Loss_MAC + Joint_copula_nll + 1.5*Loss_mix_diveristy + 0.1 * Loss_boundary
         
         return ELBO_loss
     
