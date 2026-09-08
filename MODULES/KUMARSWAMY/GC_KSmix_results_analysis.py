@@ -10,17 +10,18 @@ import pandas as pd
 import tensorflow as tf
 import tensorflow.keras as K
 
-# Import new KS functions
+# Import new KS functions, including the newly added plot_random_2d_posteriors
 from MODULES.KUMARSWAMY.GC_KSmix_functions_for_results_analysis import (
     calculate_posterior_PDF_info, plot_results_PDF_uncertainty,
-    plot_physical_pdf_profile, calculate_ks_mixture_metrics
+    plot_physical_pdf_profile, calculate_ks_mixture_metrics,
+    plot_random_2d_posteriors
 )
 from MODULES.PREPROCESSING.preprocessing import load_data, load_known_matrices
 from MODULES.COPULAS.GC_GMm_functions import build_correlation_matrices_from_cholesky
 from MODULES.KUMARSWAMY.GC_KSmix_uncertainty_quantification import calculate_and_plot_ks_calibration, enhanced_metrics_comparison 
 
 # --- Config ---
-filename = "26Mar_KSmixGCopula_5Els_5KSmix_Gamma0.35_LR1e-06_10000epoch" # Update to folder name
+filename = "u06Sept26_GCopKS_10Els_3KSmix_Gamma0.4_LR0.0001_10000epoch" # Update to folder name
 model_type_name = 'KS_Copula'
 folder_path = os.path.join('Output', model_type_name, filename)
 lbound = 0.45
@@ -35,22 +36,18 @@ mean_freq = info['mean_f']
 std_freq = info['std_f']
 beta = info['gamma']
 
-n_elements = 5
+n_elements = 10
 n_dofs = 2 * (n_elements + 1)
 fixed_dofs = [0, n_dofs - 2] 
 all_dofs = np.arange(n_dofs)
 free_dofs = np.delete(all_dofs, fixed_dofs)
 batch_size = 256
 
-
-
 #1.2. plot the loss functions
 from MODULES.POSTPROCESSING.plot_losses import plot_trainval_loss, plot_freqsMACs_loss
 history_ = np.load(os.path.join(folder_path, "model_history.npy"),allow_pickle = True)
 plot_trainval_loss(history_, folder_path)
 plot_freqsMACs_loss(history_, folder_path)
-
-
 
 # 2. Load Test Results
 Test_pred_props = np.load(os.path.join(folder_path, "Test_predicted_props.npy"), allow_pickle=True).item()
@@ -63,7 +60,7 @@ test_offdiag = Test_pred_props['test_offdiag_elems']
 test_diag = Test_pred_props['test_diag_elems']
 
 # 3. Load Physics and Ground Truth Data
-data_folder = "01Mar2026_Noisy_E5_level25"
+data_folder = "16Mar2026_Noisy_E10_level25_10modes"
 data_path = os.path.join("Data", data_folder)
 
 (Freqs_train, _, _, _, _, _, _, _, Freqs_test, Rot_test, Vert_test, Alphas_test, _, _) = load_data(data_path, batch_size)
@@ -87,20 +84,28 @@ predicted_stats = {
     'test_L_matrices': L_matrices
 }
 
+# Add physics configurations for Table 4 ELBO & Probabilistic evaluations
+physics_kwargs = {
+    'Ke_matrices': Ke_matrices,
+    'L_inv': L_inv,
+    'n_modes': n_modes,
+    'free_dofs': free_dofs,
+    'fixed_dofs': fixed_dofs,
+    'n_dofs': n_dofs,
+    'mean_freq': mean_freq,
+    'std_freq': std_freq,
+    'gamma': beta 
+}
+
 # # --- Analysis Execution ---
 print("\n--- KS-VAE Performance Metrics ---")
-metrics = calculate_ks_mixture_metrics(predicted_stats, test_datasets, lbound)
-print("Metrics summary:", metrics)
-# enhanced_metrics = enhanced_metrics_comparison(predicted_stats, test_datasets, lbound)
-# print("enhaced metrics", enhanced_metrics)
+metrics, covered = calculate_ks_mixture_metrics(predicted_stats, test_datasets, lbound, physics_kwargs=physics_kwargs)
+print("Metrics summary:")
+for k, v in metrics.items():
+    print(f"  {k}: {v}")
+
 # %%  --- Visualizing Specific Samples ---
 
-
-# positions = [34, 63, 77, 219,1178] # Example indices
-
-# positions = [0, 1, 7, 9, 11, 17, 25, 34, 45, 100, 138, 219, 234, 343, 456, 555, 612, 690, 761]
-# positions  = [2,20,21,41,43,48,50,63, 64, 65, 77, 78, 91,92,98,99,102,560,576]
-# positions = [300,301,302,303,304,305,310,311,312,313,314,315,321,322,323]
 positions = [ 815,  723, 1318, 1077, 1228, 1396,  664, 1679,  689,  279, 1257,
        1178,   30, 1707, 1182, 1772, 1398,  442,  120, 1500, 1349, 1360,
         969,  383,  246,  510, 1455, 1586, 1776, 1787, 1100,  293, 1530,
@@ -111,17 +116,29 @@ n_samples = 4096
 
 for pos in positions:
     print(f"Processing Sample {pos}...")
+    
+    # Gather necessary data using the calculation function
     z_true, z_samples, post_weights = calculate_posterior_PDF_info(
         fixed_dofs, n_modes, beta, n_samples, pos, n_dofs, free_dofs, 
         test_datasets, predicted_stats, L_inv, Ke_matrices, Mfree, 
         mean_freq, std_freq, lbound, folder_path
     )
-    print(z_true)
-    plot_results_PDF_uncertainty(fixed_dofs, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
-                                     predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, lbound, folder_path)
     
+    print(f"Ground Truth for Sample {pos}: {z_true}")
     
+    # -------------------------------------------------------------
+    # Plot J randomly chosen 2D slices instead of the full corner plot 
+    # to maintain legibility for high dimensional outputs.
+    # We choose J=10 subplots arbitrarily here.
+    # -------------------------------------------------------------
+    print(f"Plotting 10 Random 2D Posteriors for sample {pos}...")
+    plot_random_2d_posteriors(
+        z_samples, post_weights, z_true, n_elements, pos, 
+        folder_path, lbound=lbound, J=10
+    )
     
+    # Optionally, you can also keep the physical profile graph
+    # print(f"Plotting Physical Profile for sample {pos}...")
     # plot_physical_pdf_profile(z_samples, post_weights, z_true, n_elements, pos, folder_path, lbound=lbound)
 
 print("Analysis Complete.")
@@ -130,4 +147,4 @@ print("Analysis Complete.")
 print("\n--- Generating Uncertainty Quantification (UQ) Plots ---")
 
 # 1. Marginal Calibration Curve
-calculate_and_plot_ks_calibration(predicted_stats, test_datasets, lbound, folder_path) 
+calculate_and_plot_ks_calibration(predicted_stats, test_datasets, lbound, folder_path)

@@ -17,8 +17,7 @@ def Fully_connected_enc_GC_KS(input_dim, n_dims, num_KS, lbound):
     # a, b parameters (B, D * K)
     a_params = K.layers.Dense(n_dims * num_KS, activation='softplus', name='a_ks')(x)
     b_params = K.layers.Dense(n_dims * num_KS, activation='softplus', name='b_ks')(x)
-    # a_params = a_params + 0.1 
-    # b_params = b_params + 0.1
+    
     a_params = tf.clip_by_value(a_params + 0.015, 0.01, 200.0) 
     b_params = tf.clip_by_value(b_params + 0.015, 0.01, 200.0) 
 

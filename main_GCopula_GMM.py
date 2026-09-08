@@ -64,12 +64,12 @@ def main():
     K.backend.set_floatx('float32')
     
     # --- 2. DATA LOADING ---
-    data_folder = "01Mar2026_Noisy_E5_level25"
-    # data_folder = "16Mar2026_Noisy_E10_level25_5modes"
+    # data_folder = "01Mar2026_Noisy_E5_level25"
+    data_folder = "16Mar2026_Noisy_E10_level25_10modes"
 
     data_path = os.path.join("Data", data_folder)
     
-    n_elements = 5
+    n_elements = 10
     n_dofs = 2 * (n_elements + 1) 
     lbound = 0.45 
     fixed_dofs_indices = [0, n_dofs - 2]
@@ -96,11 +96,11 @@ def main():
     num_gaussians = 1
     n_dims = alpha_factors_true_train.shape[1]
     num_samples = 1 
-    gamma = 0.3
+    gamma = 0.4
     
     # Output Directory
-    filename = f"F22MarHD_{n_elements}Els_{n_modes}modes_Nosiy2.5_{lbound}lbound_Gamma{gamma}_{n_epochs}Epochs_lr{base_lr}"
-    folder_path = os.path.join('Output', "Gaussian_Copula", filename)
+    filename = f"05Sept_Copula_{n_elements}Els_{n_modes}modes_Nosiy2.5_{lbound}lbound_Gamma{gamma}_{n_epochs}Epochs_lr{base_lr}"
+    folder_path = os.path.join('Output', "Gaussian_Copula_18August", filename)
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
         

@@ -154,15 +154,15 @@ def generate_dataset(n_samples, n_elements, n_modes, data_file_path,
             np.array(alphas_dataset))
 
 if __name__ == "__main__":
-    n_elements = 10
-    n_modes = 5
+    n_elements = 50
+    n_modes = 50
     N_samples = 20000 
     
     # 2.5% Frequency Noise, 5% Mode Shape Noise
     F_NOISE = 0.025
     M_NOISE = 0.05
 
-    folder_name = f"16Mar2026_Noisy_E{n_elements}_level{int(F_NOISE*1000)}_5modes"
+    folder_name = f"06Sept2026_Noisy_E{n_elements}_level{int(F_NOISE*1000)}_{n_modes}modes"
     data_file_path = os.path.join("Data", folder_name)
 
     if not os.path.exists(data_file_path):
