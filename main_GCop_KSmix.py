@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Created on Feb 2026
-Updated for Kumaraswamy Mixture Marginals
+Updated for Kumaraswamy Mixture Marginals (Optimized Version)
 """
 
 import os
@@ -64,11 +64,11 @@ def main():
     K.backend.set_floatx('float32')
     
     # --- DATA LOADING ---
-    data_folder = "06Sept2026_Noisy_E50_level25_50modes"
+    data_folder = "01Mar2026_Noisy_E5_level25"
 
     data_path = os.path.join("Data", data_folder)
     
-    n_elements = 50
+    n_elements = 5
     n_dofs = 2 * (n_elements + 1) 
     lbound = 0.45 
     fixed_dofs_indices = [0, n_dofs - 2]
@@ -90,12 +90,12 @@ def main():
     n_modes = Freqs_true_train.shape[1]
     n_epochs = 10000
     base_lr = 1e-4
-    num_KS = 2  # Number of Kumaraswamy components
+    num_KS = 5  # Number of Kumaraswamy components
     n_dims = alpha_factors_true_train.shape[1]
     num_samples = 1 
     gamma = 0.4
     
-    filename = f"u08Sept26_GCopKS_{n_elements}Els_{num_KS}KSmix_Gamma{gamma}_LR{base_lr}_{n_epochs}epoch"
+    filename = f"23Sept26_GCopKS_{n_elements}Els_{num_KS}KSmix_Gamma{gamma}_LR{base_lr}_{n_epochs}epoch"
     folder_path = os.path.join('Output', "KS_Copula", filename)
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)

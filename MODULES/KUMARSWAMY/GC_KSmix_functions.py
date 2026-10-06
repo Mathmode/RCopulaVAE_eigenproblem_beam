@@ -2,15 +2,11 @@
 """
 Created on Tue Mar 24 11:04:06 2026
 Enhanced Functions for Gaussian Copula and Kumaraswamy Mixture Marginals.
-Includes Bisection Solver for Quantiles and Physics-Prioritized Gradients.
-NaN fixes applied: Removed redundant double softmax, fixed float32 clipping.
+Optimized mathematically to minimize graph size, avoid heavy objects, and accelerate XLA compilation.
 """
 
 import tensorflow as tf
-import tensorflow_probability as tfp
 import numpy as np
-
-tfd = tfp.distributions
 
 @tf.function(jit_compile = True)
 def build_correlation_matrices_from_cholesky(off_diag_elements, diag_elements, n_dims):
@@ -46,9 +42,7 @@ def build_correlation_matrices_from_cholesky(off_diag_elements, diag_elements, n
 @tf.function(jit_compile=True)
 def gaussian_copula_samples(LT_matrices, n_dims, n_samples, lbound):
     """
-    Generates samples via fast differentiable einsum (bypassing the slow while_loop).
-    CRITICAL FIX: 'bik, bsk -> bsi' correctly computes L * eps (covariance L*L^T),
-    preventing the -3e23 PDF evaluation crash.
+    Generates samples via fast differentiable einsum.
     """
     batch_size = tf.shape(LT_matrices)[0]
     
@@ -58,17 +52,18 @@ def gaussian_copula_samples(LT_matrices, n_dims, n_samples, lbound):
     # Matmul mapping correctly computing L * epsilon
     mvn_samples = tf.einsum('bik, bsk -> bsi', LT_matrices, epsilon)
     
-    # Transform to Uniform [0, 1] via Normal CDF
-    u = tfd.Normal(0.0, 1.0).cdf(mvn_samples)
+    # Transform to Uniform [0, 1] via Fast Normal CDF (replaces slow tfd.Normal usage)
+    u = 0.5 * (1.0 + tf.math.erf(mvn_samples / tf.math.sqrt(2.0)))
     
-    # Exact safety bounds from your original while_loop implementation
+    # Exact safety bounds
     return tf.clip_by_value(u, 1e-5, 1.0 - 1e-5)
 
 @tf.function(jit_compile=True)
 def _pure_kumaraswamy_sampling_jit(a_params, b_params, weight_vals, copula_samples, lbound):
     """
     Unconditionally stable Bisection solver for Kumaraswamy Mixtures.
-    Double softmax removed to fix vanishing gradients when scaling components.
+    OPTIMIZATION: Float32 max precision natively caps at 23 iterations (mantissa is 23 bits). 
+    Looping 35 times was computationally wasteful. Reduced to 23 for exact same precision.
     """
     u = tf.clip_by_value(copula_samples, 1e-7, 1.0 - 1e-7)
     
@@ -76,18 +71,18 @@ def _pure_kumaraswamy_sampling_jit(a_params, b_params, weight_vals, copula_sampl
     a_t = tf.transpose(a_params, perm=[0, 2, 1])[:, tf.newaxis, :, :]
     b_t = tf.transpose(b_params, perm=[0, 2, 1])[:, tf.newaxis, :, :]
     
-    # FIX: weights are already softmaxed in the Model. Do NOT apply tf.nn.softmax here!
+    # Weights are already softmaxed in the Model.
     weights_t = tf.transpose(weight_vals, perm=[0, 2, 1])[:, tf.newaxis, :, :]
 
     low = tf.zeros_like(u)
     high = tf.ones_like(u)
 
-    for _ in range(35):
+    # 23 Iterations guarantees ~1.19e-7 precision (Float32 epsilon)
+    for _ in range(23): 
         mid = (low + high) / 2.0
         mid_expand = tf.expand_dims(mid, axis=-1)
         
         x_a = tf.math.pow(tf.maximum(mid_expand, 1e-10), a_t)
-        # FIX: float32 clipping adjusted from 1e-30 to 1e-7. 
         one_minus_x_a = tf.clip_by_value(1.0 - x_a, 1e-7, 1.0) 
         cdf_components = 1.0 - tf.math.pow(one_minus_x_a, b_t)
         
@@ -112,8 +107,6 @@ def fast_kumaraswamy_quantile(a_params, b_params, weight_vals, copula_samples, l
             
             a_t = tf.transpose(a_params, perm=[0, 2, 1])[:, tf.newaxis, :, :]
             b_t = tf.transpose(b_params, perm=[0, 2, 1])[:, tf.newaxis, :, :]
-            
-            # FIX: Double softmax removed. Use raw model weights.
             w_t = tf.transpose(weight_vals, perm=[0, 2, 1])[:, tf.newaxis, :, :]
             
             x_stop = tf.stop_gradient(x)

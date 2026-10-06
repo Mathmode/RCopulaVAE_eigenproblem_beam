@@ -6,7 +6,9 @@ Created on Tue Mar 24 15:53:56 2026
 """
 
 import os
+import random
 import numpy as np
+import scipy.stats as stats
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
 import tensorflow as tf
@@ -38,7 +40,6 @@ def gaussian_copula(LT_matrix, n_dims, n_samples):
     Derives dimensions directly from LT_matrix to prevent broadcasting errors.
     """
     LT_matrix = tf.cast(LT_matrix, tf.float32)
-    # Use the matrix shape to define the loc vector to ensure compatibility
     dim = tf.shape(LT_matrix)[-1]
     
     mvn_model = tfd.MultivariateNormalTriL(
@@ -46,51 +47,60 @@ def gaussian_copula(LT_matrix, n_dims, n_samples):
         scale_tril=LT_matrix
     )
     mvn_samples = mvn_model.sample(n_samples)
+    if len(mvn_samples.shape) == 3:
+        mvn_samples = tf.transpose(mvn_samples, [1, 0, 2]) # Convert to [Batch, Samples, Dims]
+        
     copula_samples = tfd.Normal(loc=0.0, scale=1.0).cdf(mvn_samples)
     return copula_samples
 
 def kumaraswamy_mixture_quantile(u, a, b, weights, lbound=0.45):
     """
     Inverse CDF (Quantile function) for a mixture of Kumaraswamy distributions.
-    u: samples from copula [0, 1] - Shape (n_samples, n_dims)
-    a, b, weights: KS parameters - Shape (n_dims, num_KS)
+    Dynamically handles Batched/Unbatched parameters and varying MC sample dimensions.
     """
-    n_samples, n_dims = u.shape
+    u = tf.cast(u, tf.float32)
+    a = tf.cast(a, tf.float32)
+    b = tf.cast(b, tf.float32)
+    w = tf.cast(weights, tf.float32)
     
-    # Ensure inputs are tensors with correct types
-    a = tf.convert_to_tensor(a, dtype=tf.float32)
-    b = tf.convert_to_tensor(b, dtype=tf.float32)
-    weights = tf.convert_to_tensor(weights, dtype=tf.float32)
+    original_u_shape = tf.shape(u)
     
-    # Robust shape checking: we expect parameters to be (n_dims, num_KS)
-    # If the user passed (num_KS, n_dims), we transpose them
-    if a.shape[0] != n_dims and a.shape[1] == n_dims:
-        a = tf.transpose(a)
-        b = tf.transpose(b)
-        weights = tf.transpose(weights)
-        
-    z_samples_list = []
+    if len(a.shape) == 2: 
+        a = tf.expand_dims(a, axis=0)
+        b = tf.expand_dims(b, axis=0)
+        w = tf.expand_dims(w, axis=0)
+        if len(u.shape) == 2:
+            u = tf.expand_dims(u, axis=0)
+    else: 
+        if len(u.shape) == 2:
+            u = tf.expand_dims(u, axis=1)
+            
+    u = tf.clip_by_value(u, 1e-7, 1.0 - 1e-7)
     
-    for d in range(n_dims):
-        # 1. Select mixture components for this dimension d
-        logits = tf.math.log(tf.reshape(weights[d], [1, -1]) + 1e-10)
-        comp_indices = tf.random.categorical(logits, n_samples)
-        comp_indices = tf.cast(tf.squeeze(comp_indices), tf.int32)
+    a_t = tf.transpose(a, perm=[0, 2, 1])[:, tf.newaxis, :, :]
+    b_t = tf.transpose(b, perm=[0, 2, 1])[:, tf.newaxis, :, :]
+    w_t = tf.transpose(w, perm=[0, 2, 1])[:, tf.newaxis, :, :]
+
+    low = tf.zeros_like(u)
+    high = tf.ones_like(u)
+
+    for _ in range(35):
+        mid = (low + high) / 2.0
+        mid_expand = tf.expand_dims(mid, axis=-1)
         
-        # 2. Gather parameters for the selected components
-        a_d = tf.gather(a[d], comp_indices)
-        b_d = tf.gather(b[d], comp_indices)
+        x_a = tf.math.pow(tf.maximum(mid_expand, 1e-10), a_t)
+        one_minus_x_a = tf.clip_by_value(1.0 - x_a, 1e-7, 1.0) 
+        cdf_components = 1.0 - tf.math.pow(one_minus_x_a, b_t)
         
-        # 3. Apply Quantile function: Q(u) = (1 - (1-u)^(1/b))^(1/a)
-        u_d = u[:, d]
-        # Add epsilon to prevent NaN in power operations at boundaries
-        ks_unit = tf.pow(1.0 - tf.pow(tf.maximum(1.0 - u_d, 1e-10), 1.0/b_d), 1.0/a_d)
+        cdf_mid = tf.reduce_sum(w_t * cdf_components, axis=-1)
+        is_less = cdf_mid < u
         
-        # 4. Scale to [lbound, 1.0]
-        z_d = lbound + (1.0 - lbound) * ks_unit
-        z_samples_list.append(z_d)
-        
-    return tf.stack(z_samples_list, axis=1)
+        low = tf.where(is_less, mid, low)
+        high = tf.where(is_less, high, mid)
+
+    res = lbound + (1.0 - lbound) * ((low + high) / 2.0)
+    res = tf.reshape(res, original_u_shape)
+    return res
 
 def calculate_MAC(modes_true, modes_pred):
     modes_true = tf.cast(modes_true, tf.float32)
@@ -133,105 +143,175 @@ def physics_engine_step(K_batch, L_inv_tf, n_modes, free_dofs, n_dofs):
 
 from MODULES.COPULAS.GC_GMm_GPU_eigen_functions import assemble_global_Kmatrices
 
-def calculate_ks_mixture_metrics(predicted_stats, test_datasets, lbound=0.45):
+def calculate_ks_mixture_metrics(predicted_stats, test_datasets, lbound=0.45, physics_kwargs=None):
     """
     Calculates numerical metrics to evaluate the GC-VAE (Kumaraswamy Mixture) inference.
-    
-    Shapes (Corrected):
-    - test_a, test_b, test_weights: [n_samples, num_KS, n_dims] (e.g., [1808, 3, 5])
-    - z_true: [n_samples, n_dims] (e.g., [1808, 5])
+    Correctly aligns the bounded prior log-density contribution without redundant cancellations.
     """
-    # Unpack params
-    test_a = predicted_stats['test_a']           # [N, 3, 5]
-    test_b = predicted_stats['test_b']           # [N, 3, 5]
-    test_weights = predicted_stats['test_weights'] # [N, 3, 5]
-    z_true = test_datasets['alpha_factors_true_test'] # [N, 5]
+    test_a = predicted_stats['test_a']           
+    test_b = predicted_stats['test_b']           
+    test_weights = predicted_stats['test_weights'] 
+    LT_matrix = predicted_stats['test_L_matrices'] 
+    z_true = test_datasets['alpha_factors_true_test'] 
     
-    n_samples, num_KS, n_dims = test_a.shape
+    N = test_a.shape[0]
+    num_KS = test_a.shape[1]
+    n_dims = test_a.shape[2]
     
-    # --- 1. Point Estimate (Analytical Mean of Mixture) ---
-    def ks_mean_func(a, b):
-        return b * beta_func(1 + 1/a, b)
-
-    # Calculate mean for every individual component: [N, 3, 5]
-    comp_means = ks_mean_func(test_a, test_b) 
+    batch_size = 200
+    n_mc_samples = 5000
     
-    # Weighted mean across the mixture dimension (axis=1)
-    # Result shape: [N, 5]
-    predicted_means_unit = np.sum(test_weights * comp_means, axis=1)
+    all_true_log_probs = []
+    all_samp_log_probs = []
+    all_mse, all_mae = [], []
+    all_coverage, all_sharpness = [], []
+    all_z_phys_samp = []
+    all_covered = [] 
     
-    # Map from unit space [0, 1] to physical space [lbound, 1.0]
-    predicted_means = lbound + (1.0 - lbound) * predicted_means_unit
-    
-    # Shapes match: [N, 5] vs [N, 5]
-    mse = np.mean(np.square(predicted_means - z_true))
-    mae = np.mean(np.abs(predicted_means - z_true))
-
-    # --- 2. Uncertainty Calibration (95% Credible Intervals) ---
-    grid = np.linspace(0, 1, 1000)
-    z_lower = np.zeros((n_samples, n_dims))
-    z_upper = np.zeros((n_samples, n_dims))
-    
-    # Grid search for quantiles per dimension per sample
-    for i in range(n_samples):
-        for d in range(n_dims):
-            a_vec = test_a[i, :, d] # [3] - components for this dimension
-            b_vec = test_b[i, :, d] # [3]
-            w_vec = test_weights[i, :, d] # [3]
-            
-            # Broadcast grid [1000, 1] with params [1, 3] to get [1000, 3]
-            comp_cdfs = 1.0 - np.power(1.0 - np.power(grid[:, None], a_vec), b_vec)
-            # Sum weighted components to get mixture CDF [1000]
-            mix_cdf = np.sum(w_vec * comp_cdfs, axis=1)
-            
-            z_lower[i, d] = grid[np.searchsorted(mix_cdf, 0.025)]
-            z_upper[i, d] = grid[np.searchsorted(mix_cdf, 0.975)]
-
-    # Map intervals to physical space
-    z_lower_phys = lbound + (1.0 - lbound) * z_lower
-    z_upper_phys = lbound + (1.0 - lbound) * z_upper
-    
-    covered = (z_true >= z_lower_phys) & (z_true <= z_upper_phys)
-    coverage_score = np.mean(covered)
-    sharpness = np.mean(z_upper_phys - z_lower_phys)
-
-    # --- 3. Probabilistic Log-Likelihood ---
-    z_true_unit = (z_true - lbound) / (1.0 - lbound)
-    z_true_unit = np.clip(z_true_unit, 1e-6, 1.0 - 1e-6)
-    
-    log_probs = []
-    for i in range(n_samples):
-        # z_val: [5], a_k/b_k/w_k: [3, 5]
-        z_val = z_true_unit[i] # [5]
-        a_k = test_a[i] # [3, 5]
-        b_k = test_b[i] # [3, 5]
-        w_k = test_weights[i] # [3, 5]
+    for i in range(0, N, batch_size):
+        end_idx = min(i + batch_size, N)
+        b_a = test_a[i:end_idx]
+        b_b = test_b[i:end_idx]
+        b_w = test_weights[i:end_idx]
+        b_L = LT_matrix[i:end_idx]
+        b_z_true = z_true[i:end_idx]
         
-        # PDF calculation: Use broadcasting between z_val [5] and params [3, 5]
-        # pdf_comps result: [3, 5]
-        pdf_comps = w_k * a_k * b_k * np.power(z_val, a_k - 1) * np.power(1.0 - np.power(z_val, a_k), b_k - 1)
-        pdf_mix = np.sum(pdf_comps, axis=0) # [5] - sum over mixture components
-        log_probs.append(np.mean(np.log(pdf_mix + 1e-12)))
+        # --- 1. Point Estimate (Analytical Mean of Mixture) ---
+        b_comp_means = b_b * beta_func(1 + 1/b_a, b_b) 
+        b_pred_means_unit = np.sum(b_w * b_comp_means, axis=1)
+        b_pred_means = lbound + (1.0 - lbound) * b_pred_means_unit
+        
+        all_mse.extend(np.mean(np.square(b_pred_means - b_z_true), axis=-1))
+        all_mae.extend(np.mean(np.abs(b_pred_means - b_z_true), axis=-1))
 
-    avg_log_prob = np.mean(log_probs)
+        # --- 2. Probabilistic Log-Likelihood & True z evaluation ---
+        b_z_true_unit = (b_z_true - lbound) / (1.0 - lbound)
+        b_z_true_unit = np.clip(b_z_true_unit, 1e-6, 1.0 - 1e-6)
+        
+        z_exp = np.expand_dims(b_z_true_unit, axis=1) 
+        comp_cdfs = 1.0 - np.power(1.0 - np.power(z_exp, b_a), b_b)
+        u_d_true = np.sum(b_w * comp_cdfs, axis=1) 
+        
+        comp_pdfs = b_w * b_a * b_b * np.power(z_exp, b_a - 1) * np.power(1.0 - np.power(z_exp, b_a), b_b - 1)
+        log_q_d_true = np.log(np.sum(comp_pdfs, axis=1) + 1e-12)
+        
+        u_d_true = np.clip(u_d_true, 1e-6, 1.0 - 1e-6)
+        w_true = stats.norm.ppf(u_d_true)
+        
+        mvn = tfd.MultivariateNormalTriL(loc=tf.zeros(n_dims, dtype=tf.float32), scale_tril=tf.cast(b_L, tf.float32))
+        log_c_true = mvn.log_prob(tf.cast(w_true, tf.float32)).numpy() - np.sum(stats.norm.logpdf(w_true), axis=1)
+        
+        # Explicit marginal volume density normalization without redundant inverse offsetting
+        joint_log_prob_true = log_c_true + np.sum(log_q_d_true, axis=1) - n_dims * np.log(1.0 - lbound)
+        all_true_log_probs.extend(joint_log_prob_true)
 
+        # --- 3. MC Sampling for Calibration & KL ---
+        w_samps = mvn.sample(n_mc_samples)
+        w_samps = tf.transpose(w_samps, [1, 0, 2]) 
+        u_samps = tfd.Normal(loc=0.0, scale=1.0).cdf(w_samps)
+        
+        z_samps_phys = kumaraswamy_mixture_quantile(u_samps, b_a, b_b, b_w, lbound).numpy()
+        z_samps_unit = (z_samps_phys - lbound) / (1.0 - lbound)
+        
+        z_lower = np.percentile(z_samps_phys, 2.5, axis=1)
+        z_upper = np.percentile(z_samps_phys, 97.5, axis=1)
+        
+        b_covered = (b_z_true >= z_lower) & (b_z_true <= z_upper)
+        all_covered.append(b_covered)
+        all_coverage.extend(np.mean(b_covered, axis=-1))
+        all_sharpness.extend(np.mean(z_upper - z_lower, axis=-1))
+        
+        z_unit_samp1 = z_samps_unit[:, 0, :] 
+        all_z_phys_samp.append(z_samps_phys[:, 0, :])
+        
+        z_exp_samp = np.expand_dims(z_unit_samp1, axis=1)
+        comp_cdfs_s = 1.0 - np.power(1.0 - np.power(z_exp_samp, b_a), b_b)
+        u_d_samp = np.sum(b_w * comp_cdfs_s, axis=1)
+        
+        comp_pdfs_s = b_w * b_a * b_b * np.power(z_exp_samp, b_a - 1) * np.power(1.0 - np.power(z_exp_samp, b_a), b_b - 1)
+        log_q_d_samp = np.log(np.sum(comp_pdfs_s, axis=1) + 1e-12)
+        
+        u_d_samp = np.clip(u_d_samp, 1e-6, 1.0 - 1e-6)
+        w_samp = stats.norm.ppf(u_d_samp)
+        
+        log_c_samp = mvn.log_prob(tf.cast(w_samp, tf.float32)).numpy() - np.sum(stats.norm.logpdf(w_samp), axis=1)
+        joint_log_prob_samp = log_c_samp + np.sum(log_q_d_samp, axis=1) - n_dims * np.log(1.0 - lbound)
+        all_samp_log_probs.extend(joint_log_prob_samp)
+
+    covered = np.concatenate(all_covered, axis=0)
+    avg_log_prob = float(np.mean(all_true_log_probs))
+    
+    p_params = (3 * num_KS - 1) * n_dims + (n_dims * (n_dims - 1)) / 2
+    BIC = -2 * avg_log_prob + (p_params * np.log(N)) / N
+
+    # Correct analytical prior log density matched directly to domain volume bounds
+    log_prior = -n_dims * np.log(1.0 - lbound)
+    KLtest = float(np.mean(np.array(all_samp_log_probs) - log_prior))
+    
     metrics = {
-        'MSE': mse,
-        'MAE': mae,
-        '95% Coverage': coverage_score,
-        'Mean Interval Width': sharpness,
-        'Avg Log-Likelihood': avg_log_prob
+        'MSE': float(np.mean(all_mse)),
+        'MAE': float(np.mean(all_mae)),
+        '95% Coverage': float(np.mean(all_coverage)),
+        'Mean Interval Width': float(np.mean(all_sharpness)),
+        'Avg Log-Likelihood (True Z)': avg_log_prob,
+        'KLtest': KLtest,
+        'BICtest': float(BIC)
     }
     
+    if physics_kwargs is not None:
+        Ke_matrices = physics_kwargs['Ke_matrices']
+        L_inv = tf.cast(physics_kwargs['L_inv'], tf.float32)
+        n_modes = physics_kwargs['n_modes']
+        free_dofs = physics_kwargs['free_dofs']
+        fixed_dofs = physics_kwargs['fixed_dofs']
+        n_dofs = physics_kwargs['n_dofs']
+        mean_freq = physics_kwargs['mean_freq']
+        std_freq = physics_kwargs['std_freq']
+        gamma = physics_kwargs['gamma']
+        
+        z_all_samp_phys = np.concatenate(all_z_phys_samp, axis=0)
+        z_tensor = tf.cast(z_all_samp_phys, dtype=tf.float32)
+        if len(Ke_matrices.shape) == 2:
+            Ke_matrices_dam = tf.einsum('BE, KQ -> BEKQ', z_tensor, tf.cast(Ke_matrices, dtype=tf.float32))
+        else:
+            Ke_matrices_dam = tf.einsum('BE, EKQ -> BEKQ', z_tensor, tf.cast(Ke_matrices, dtype=tf.float32))
+            
+        Kfree_matrices = assemble_global_Kmatrices(Ke_matrices_dam, n_dims, N, fixed_dofs)
+        
+        batch_size_pe = 256
+        all_f, all_rot, all_vert = [], [], []
+        for i in range(0, N, batch_size_pe):
+            f, r, v = physics_engine_step(Kfree_matrices[i : i + batch_size_pe], L_inv, n_modes, free_dofs, n_dofs)
+            all_f.append(f)
+            all_rot.append(r)
+            all_vert.append(v)
+            
+        f_pred = np.concatenate(all_f, axis=0)
+        rot_pred = np.concatenate(all_rot, axis=0)
+        vert_pred = np.concatenate(all_vert, axis=0)
+        
+        obs_f_scaled = test_datasets['Freqs_true_test']
+        pred_logscaled = (np.log(f_pred) - mean_freq) / std_freq
+        loss_f = np.mean(np.square(obs_f_scaled - pred_logscaled), axis=1)
+
+        obs_r_batch = test_datasets['Rotmodes_true_test']
+        obs_v_batch = test_datasets['Vertmodes_true_test']
+        
+        rot_mac = calculate_MAC(obs_r_batch, rot_pred)
+        vert_mac = calculate_MAC(obs_v_batch, vert_pred)
+        loss_mac = np.mean((1.0 - rot_mac) + (1.0 - vert_mac), axis=1)
+        
+        inv_gamma_val = 1.0 / (gamma**2)
+        data_log_lik = -(loss_f + loss_mac) * inv_gamma_val
+        KL_divergences = np.array(all_samp_log_probs) - log_prior
+        
+        Avg_ELBOtest = float(np.mean(data_log_lik - KL_divergences))
+        metrics['Avg. ELBOtest'] = Avg_ELBOtest
+
     return metrics, covered
-
-
 
 def plot_results_PDF_uncertainty(fixed_dofs_indices, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
                                  predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, lbound, folder_path):
-    """
-    Generates joint posterior plots using KS-mixture VAE distribution + Bayesian re-weighting.
-    """
     a_vals = predicted_stats['test_a'][pos]      
     b_vals = predicted_stats['test_b'][pos]      
     w_vals = predicted_stats['test_weights'][pos] 
@@ -243,17 +323,13 @@ def plot_results_PDF_uncertainty(fixed_dofs_indices, n_modes, beta, n_samples, p
     Alphas_true = test_datasets['alpha_factors_true_test']
     z_true = Alphas_true[pos,:]
     
-    # Identify true stiffness dimension from the LT matrix
     n_elements = LT_matrix.shape[-1]
 
-    # 1. GENERATE SAMPLES FROM KS MIXTURE COPULA
     L_inv_tf = tf.cast(L_inv, dtype=tf.float32)
-    # n_elements is passed to ensure loc matches matrix size
     copula_samples = gaussian_copula(LT_matrix, n_elements, n_samples) 
     z_samples = kumaraswamy_mixture_quantile(copula_samples, a_vals, b_vals, w_vals, lbound=lbound)
     z_samples = tf.cast(z_samples, dtype=tf.float32)
 
-    # 2. PHYSICS PROPAGATION
     Ke_matrices_dam = tf.einsum('BE, EKQ -> BEKQ', z_samples, tf.cast(Ke_matrices, dtype=tf.float32))
     Kfree_matrices = assemble_global_Kmatrices(Ke_matrices_dam, n_elements, n_samples, fixed_dofs_indices)
     
@@ -269,7 +345,6 @@ def plot_results_PDF_uncertainty(fixed_dofs_indices, n_modes, beta, n_samples, p
     rot_pred = np.concatenate(all_rot, axis=0)
     vert_pred = np.concatenate(all_vert, axis=0)
     
-    # 3. CALCULATE BAYESIAN WEIGHTS (Likelihood)
     obs_f_scaled = Freqs_true[pos]
     pred_logscaled = (np.log(f_pred) - mean_freq) / std_freq
     loss_f = np.mean(np.square(obs_f_scaled - pred_logscaled), axis=1)
@@ -286,7 +361,6 @@ def plot_results_PDF_uncertainty(fixed_dofs_indices, n_modes, beta, n_samples, p
     likelihood = np.exp(exponent - np.max(exponent))
     posterior_weights = likelihood / np.sum(likelihood) 
     
-    # 4. FILTERING & PLOTTING
     quantile_threshold = 0.95 
     sorted_indices = np.argsort(posterior_weights)[::-1]
     cumulative_weights = np.cumsum(posterior_weights[sorted_indices])
@@ -344,6 +418,8 @@ def plot_results_PDF_uncertainty(fixed_dofs_indices, n_modes, beta, n_samples, p
     plt.savefig(os.path.join(folder_path, "Matched_Posteriors_KS", f'Sample_{pos}_Matched.png'), dpi=150)
     plt.show()
     plt.close()
+    
+
 
 def calculate_posterior_PDF_info(fixed_dofs_indices, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
                                  predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq,  lbound, folder_path):
@@ -436,5 +512,71 @@ def plot_physical_pdf_profile(z_samples, posterior_weights, z_true, n_elements, 
     save_dir = os.path.join(folder_path, "KS_Physical_Profiles")
     os.makedirs(save_dir, exist_ok=True)
     plt.savefig(os.path.join(save_dir, f'Sample_{pos}_KS_UQ.png'), dpi=300)
+    plt.show()
+    plt.close()
+
+def plot_random_2d_posteriors(z_samples, posterior_weights, z_true, n_elements, pos, folder_path, lbound=0.45, J=10):
+    """
+    Plots J randomly chosen 2D slices of the posterior PDF, effectively displaying
+    a manageable subset of the corner plot to avoid unreadable high-dimensional visualizations.
+    """
+    # 1. Filtering & Weight Normalization
+    quantile_threshold = 0.95 
+    sorted_indices = np.argsort(posterior_weights)[::-1]
+    cumulative_weights = np.cumsum(posterior_weights[sorted_indices])
+    mask_indices = sorted_indices[cumulative_weights <= quantile_threshold]
+    
+    if len(mask_indices) < 30: mask_indices = sorted_indices[:100]
+
+    x_filtered = z_samples[mask_indices]
+    w_filtered = posterior_weights[mask_indices]
+    w_norm = w_filtered / np.sum(w_filtered)
+    
+    # 2. Randomly select J pairs of unique dimensions
+    max_possible_pairs = (n_elements * (n_elements - 1)) // 2
+    J_actual = min(J, max_possible_pairs)
+    
+    # Collect all possible lower-triangle pairs (r > c)
+    all_pairs = [(r, c) for r in range(n_elements) for c in range(r)]
+    chosen_pairs = random.sample(all_pairs, J_actual)
+    
+    # 3. Dynamic layout configuration
+    cols = min(J_actual, 5) # Max 5 columns per row for readability
+    rows = int(np.ceil(J_actual / cols))
+    
+    fig, axes = plt.subplots(rows, cols, figsize=(5 * cols, 5 * rows), facecolor='white')
+    
+    if J_actual == 1:
+        axes = np.array([axes])
+    axes = axes.flatten()
+    
+    # 4. Iterating and plotting KDE contours
+    for idx, (r, c) in enumerate(chosen_pairs):
+        ax = axes[idx]
+        xi, yi = np.mgrid[lbound:1.0:60j, lbound:1.0:60j]
+        
+        kernel = gaussian_kde(np.vstack([x_filtered[:, c], x_filtered[:, r]]), weights=w_norm)
+        zi = kernel(np.vstack([xi.flatten(), yi.flatten()])).reshape(xi.shape)
+        
+        cf = ax.contourf(xi, yi, zi, levels=20, cmap='viridis')
+        ax.plot(z_true[c], z_true[r], 'r*', markersize=14, markeredgecolor='white', label='Truth' if idx == 0 else "")
+        
+        ax.set_xlim(lbound, 1.0)
+        ax.set_ylim(lbound, 1.0)
+        ax.set_xlabel(f'$z_{{{c+1}}}$', fontsize=22)
+        ax.set_ylabel(f'$z_{{{r+1}}}$', fontsize=22)
+        ax.tick_params(labelsize=18)
+        
+        if idx == 0:
+            ax.legend(loc='best', fontsize=16)
+
+    # 5. Hide any unused grid axes
+    for idx in range(J_actual, len(axes)):
+        axes[idx].axis('off')
+        
+    plt.tight_layout()
+    save_dir = os.path.join(folder_path, "Random_2D_Posteriors")
+    os.makedirs(save_dir, exist_ok=True)
+    plt.savefig(os.path.join(save_dir, f'Sample_{pos}_Random_{J_actual}_2D_Posteriors.png'), dpi=150)
     plt.show()
     plt.close()

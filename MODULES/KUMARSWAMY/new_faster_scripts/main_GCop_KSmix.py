@@ -3,7 +3,6 @@
 """
 Created on Feb 2026
 Updated for Kumaraswamy Mixture Marginals
-Optimized with tf.data.Dataset for high-speed GPU streaming.
 """
 
 import os
@@ -27,27 +26,38 @@ from MODULES.KUMARSWAMY.GC_KSmix_models import My_CopulaKSVAE_withEigen
 from MODULES.COPULAS.GC_postprocessing_copulas import plot_trainval_loss, plot_JointPDF_loss, plot_Freqs_loss
 
 class DelayedEarlyStopping(K.callbacks.Callback):
-    def __init__(self, patience=1000, start_epoch=10000):
+    """
+    Robust Early Stopping. 
+    It saves the best weights during training, and will only increment the counter 
+    AFTER the start_epoch is reached. It guarantees best model retention.
+    """
+    def __init__(self, patience=300, start_epoch=2000, restore_best_weights=True):
         super(DelayedEarlyStopping, self).__init__()
         self.patience = patience
         self.start_epoch = start_epoch
+        self.restore_best_weights = restore_best_weights
         self.best_loss = np.inf
         self.wait = 0
+        self.best_weights = None
 
     def on_epoch_end(self, epoch, logs=None):
         current_loss = logs.get("val_loss")
         if current_loss is None: return
-        if epoch >= self.start_epoch:
-            if current_loss < self.best_loss:
-                self.best_loss = current_loss
-                self.wait = 0
-            else:
+        
+        if current_loss < self.best_loss:
+            self.best_loss = current_loss
+            self.wait = 0
+            if self.restore_best_weights:
+                self.best_weights = self.model.get_weights()
+        else:
+            if epoch >= self.start_epoch:
                 self.wait += 1
                 if self.wait >= self.patience:
                     print(f"\n✅ Early stopping triggered at epoch {epoch}.")
                     self.model.stop_training = True
-        elif current_loss < self.best_loss:
-            self.best_loss = current_loss
+                    if self.restore_best_weights and self.best_weights is not None:
+                        print("Restoring best model weights.")
+                        self.model.set_weights(self.best_weights)
 
 def main():
     K.utils.set_random_seed(1234)
@@ -72,18 +82,6 @@ def main():
     
     Mfree, Ke_matrices, L_inv = load_known_matrices(data_path, n_elements)
     
-    # --- SETUP TF DATASETS FOR MAXIMUM THROUGHPUT ---
-    print("Building Data Pipelines...")
-    train_dataset = tf.data.Dataset.from_tensor_slices((
-        (Freqs_true_train, Rotmodes_true_train, Vertmodes_true_train, alpha_factors_true_train),
-        alpha_factors_true_train # Dummy y
-    )).batch(batch_size).cache().prefetch(tf.data.AUTOTUNE)
-
-    val_dataset = tf.data.Dataset.from_tensor_slices((
-        (Freqs_true_val, Rotmodes_true_val, Vertmodes_true_val, alpha_factors_true_val),
-        alpha_factors_true_val # Dummy y
-    )).batch(batch_size).cache().prefetch(tf.data.AUTOTUNE)
-    
     # --- MODEL CONFIGURATION ---
     input_dim = (Freqs_true_train.shape[1] + 
                  (Rotmodes_true_train.shape[1] * Rotmodes_true_train.shape[2]) + 
@@ -92,12 +90,12 @@ def main():
     n_modes = Freqs_true_train.shape[1]
     n_epochs = 10000
     base_lr = 1e-4
-    num_KS = 3  # Number of Kumaraswamy components
+    num_KS = 2  # Number of Kumaraswamy components
     n_dims = alpha_factors_true_train.shape[1]
     num_samples = 1 
     gamma = 0.4
     
-    filename = f"Improved06Sept26_KSmixGCopula_{n_elements}Els_{num_KS}KSmix_Gamma{gamma}_LR{base_lr}_{n_epochs}epoch"
+    filename = f"u08Sept26_GCopKS_{n_elements}Els_{num_KS}KSmix_Gamma{gamma}_LR{base_lr}_{n_epochs}epoch"
     folder_path = os.path.join('Output', "KS_Copula", filename)
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
@@ -105,7 +103,7 @@ def main():
     # --- INITIALIZATION ---
     model = My_CopulaKSVAE_withEigen(
         input_dim=input_dim, num_dofs=n_dofs, n_elements=n_elements,
-        n_modes=n_modes, Ke_matrices=Ke_matrices, Mfree=Mfree, L_inv=L_inv, 
+        n_modes=n_modes, Ke_matrices=Ke_matrices, Mfree = Mfree, L_inv=L_inv, 
         n_dims=n_dims, num_KS=num_KS, num_samples=num_samples, 
         gamma=gamma, mean_f=mean_f, std_f=std_f, lbound=lbound, 
         fixed_dofs_indices=fixed_dofs_indices
@@ -125,13 +123,20 @@ def main():
     # --- TRAINING ---
     start_time = time.time()
     print("Starting Kumaraswamy Copula Training...")
-    delayed_stop = DelayedEarlyStopping(patience=1000, start_epoch=5000)
+    
+    # Set to a much safer 300 epochs of patience, initiating potential stoppages after epoch 2000
+    delayed_stop = DelayedEarlyStopping(patience=300, start_epoch=2000, restore_best_weights=True)
     
     model_history = model.fit(
-        train_dataset,
+        x=[Freqs_true_train, Rotmodes_true_train, Vertmodes_true_train, alpha_factors_true_train],
+        y=[alpha_factors_true_train], # Dummy y
+        batch_size=batch_size,
         epochs=n_epochs,
-        validation_data=val_dataset,
-        callbacks=[delayed_stop]
+        shuffle=True,
+        validation_data=(
+            [Freqs_true_val, Rotmodes_true_val, Vertmodes_true_val, alpha_factors_true_val], 
+            [alpha_factors_true_val], 
+        ), callbacks=[delayed_stop]
     )
     
     # Save Weights and History
@@ -155,13 +160,61 @@ def main():
                     'test_diag_elems': test_diag_elems, 'test_weight_vals': test_weight_vals}
     np.save(os.path.join(folder_path, 'Test_predicted_props.npy'), Test_predicted_properties, allow_pickle=True)
 
-    # --- PLOTTING ---
-    try:
-        plot_trainval_loss(model, folder_path)
-        plot_JointPDF_loss(model, folder_path)
-        plot_Freqs_loss(model, folder_path)
-    except Exception as e:
-        print(f"Plotting failed: {e}")
+        
+    test_datasets = {
+        'Freqs_true_test': Freqs_true_test,
+        'Rotmodes_true_test': Rotmodes_true_test,
+        'Vertmodes_true_test': Vertmodes_true_test,
+        'alpha_factors_true_test': alpha_factors_true_test
+    }
+    
+    # 4. Reconstruct Copula Correlation Matrices
+    from MODULES.COPULAS.GC_GMm_functions import build_correlation_matrices_from_cholesky
+
+    L_matrices = build_correlation_matrices_from_cholesky(test_offdiag_elems, test_diag_elems, n_dims)
+    
+    predicted_stats = {
+        'test_a': test_a,
+        'test_b': test_b,
+        'test_weights': test_weight_vals,
+        'test_L_matrices': L_matrices
+    }
+    
+    fixed_dofs = [0, n_dofs - 2] 
+    all_dofs = np.arange(n_dofs)
+    free_dofs = np.delete(all_dofs, fixed_dofs)
+    # Add physics configurations for Table 4 ELBO & Probabilistic evaluations
+    physics_kwargs = {
+        'Ke_matrices': Ke_matrices,
+        'L_inv': L_inv,
+        'n_modes': n_modes,
+        'free_dofs': free_dofs,
+        'fixed_dofs': fixed_dofs,
+        'n_dofs': n_dofs,
+        'mean_freq': mean_f,
+        'std_freq': std_f,
+        'gamma': gamma 
+    }
+    
+    # # --- Analysis Execution ---
+    from MODULES.KUMARSWAMY.GC_KSmix_functions_for_results_analysis import (
+        calculate_posterior_PDF_info, plot_results_PDF_uncertainty,
+        plot_physical_pdf_profile, calculate_ks_mixture_metrics,
+        plot_random_2d_posteriors
+    )
+    print("\n--- KS-VAE Performance Metrics ---")
+    metrics, covered = calculate_ks_mixture_metrics(predicted_stats, test_datasets, lbound, physics_kwargs=physics_kwargs)
+    print("Metrics summary:")
+    for k, v in metrics.items():
+        print(f"  {k}: {v}")
+    
+        # --- PLOTTING ---
+        try:
+            plot_trainval_loss(model, folder_path)
+            plot_JointPDF_loss(model, folder_path)
+            plot_Freqs_loss(model, folder_path)
+        except Exception as e:
+            print(f"Plotting failed: {e}")
 
 if __name__ == "__main__":
     main()
