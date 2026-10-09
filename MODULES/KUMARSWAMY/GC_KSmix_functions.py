@@ -5,9 +5,14 @@ Enhanced Functions for Gaussian Copula and Kumaraswamy Mixture Marginals.
 Optimized mathematically to minimize graph size, avoid heavy objects, and accelerate XLA compilation.
 """
 
+# %% IMPORTS
+# =============================================================================
 import tensorflow as tf
 import numpy as np
 
+
+# %% MATRIX OPERATIONS
+# =============================================================================
 @tf.function(jit_compile = True)
 def build_correlation_matrices_from_cholesky(off_diag_elements, diag_elements, n_dims):
     """Batched version using tf.vectorized_map."""
@@ -39,6 +44,9 @@ def build_correlation_matrices_from_cholesky(off_diag_elements, diag_elements, n
     
     return LT_matrices
 
+
+# %% COPULA SAMPLING
+# =============================================================================
 @tf.function(jit_compile=True)
 def gaussian_copula_samples(LT_matrices, n_dims, n_samples, lbound):
     """
@@ -58,6 +66,9 @@ def gaussian_copula_samples(LT_matrices, n_dims, n_samples, lbound):
     # Exact safety bounds
     return tf.clip_by_value(u, 1e-5, 1.0 - 1e-5)
 
+
+# %% KUMARASWAMY MATHEMATICS (BISECTION & GRADIENTS)
+# =============================================================================
 @tf.function(jit_compile=True)
 def _pure_kumaraswamy_sampling_jit(a_params, b_params, weight_vals, copula_samples, lbound):
     """
@@ -94,13 +105,17 @@ def _pure_kumaraswamy_sampling_jit(a_params, b_params, weight_vals, copula_sampl
 
     return (low + high) / 2.0
 
+
 @tf.custom_gradient
 def fast_kumaraswamy_quantile(a_params, b_params, weight_vals, copula_samples, lbound):
+    """
+    Computes custom stable gradients for the bisection output via the Inverse Function Theorem.
+    """
     x = _pure_kumaraswamy_sampling_jit(a_params, b_params, weight_vals, copula_samples, lbound)
     
     def grad(dy):
-        signal_multiplier = 5.0
-        dy_safe = tf.clip_by_norm(dy * signal_multiplier, 1.0) 
+        # Clip dy to prevent exploding gradients coming from the physics engine
+        dy_safe = tf.clip_by_norm(dy, 10.0) 
 
         with tf.GradientTape() as tape:
             tape.watch([a_params, b_params, weight_vals])
@@ -117,13 +132,18 @@ def fast_kumaraswamy_quantile(a_params, b_params, weight_vals, copula_samples, l
             cdf_comp = 1.0 - tf.math.pow(one_minus_x_a, b_t)
             cdf_x = tf.reduce_sum(w_t * cdf_comp, axis=-1)
             
-        x_pow = tf.math.pow(tf.maximum(x_expand, 1e-10), tf.maximum(a_t - 1.0, -0.9))
-        one_minus_x_a_pow = tf.math.pow(one_minus_x_a, tf.maximum(b_t - 1.0, -0.9))
+        x_pow = tf.math.pow(tf.maximum(x_expand, 1e-10), tf.maximum(a_t - 1.0, -0.99))
+        one_minus_x_a_pow = tf.math.pow(one_minus_x_a, tf.maximum(b_t - 1.0, -0.99))
         pdf_comp = a_t * b_t * x_pow * one_minus_x_a_pow
         pdf_x = tf.reduce_sum(w_t * pdf_comp, axis=-1)
         
-        pdf_safe = tf.clip_by_value(pdf_x, 1e-4, 50.0) 
-        grad_common = -dy_safe * (1.0 - lbound) / pdf_safe
+        pdf_safe = tf.clip_by_value(pdf_x, 1e-5, 100.0) 
+        
+        # --- FIXED: MISSING GRADIENT FOR THE COPULA ---
+        # By the inverse function theorem: dx/du = 1 / f(x). 
+        # Scaled by the physical domain bounds.
+        grad_u = dy_safe * (1.0 - lbound) / pdf_safe
+        grad_common = -grad_u
         
         grads = tape.gradient(
             cdf_x, [a_params, b_params, weight_vals], 
@@ -135,10 +155,12 @@ def fast_kumaraswamy_quantile(a_params, b_params, weight_vals, copula_samples, l
             g = tf.where(tf.math.is_finite(g), g, tf.zeros_like(g))
             return tf.clip_by_value(g, -limit, limit)
 
-        return clean(grads[0]), clean(grads[1]), clean(grads[2]), None, None
+        # Returns the gradient for `copula_samples` (grad_u) as the 4th output!
+        return clean(grads[0]), clean(grads[1]), clean(grads[2]), clean(grad_u), None
 
     z = lbound + (1.0 - lbound) * x
     return z, grad
+
 
 @tf.function
 def ks_mixture_marginal_samples(a_params, b_params, weight_vals, copula_samples, lbound):

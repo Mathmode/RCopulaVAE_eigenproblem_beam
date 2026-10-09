@@ -172,9 +172,9 @@ if __name__ == "__main__":
     N_samples = 20000 
     
     # Noise and Perturbation Levels
-    F_NOISE = 0.05
+    F_NOISE = 0.025
     M_NOISE = 0.05
-    MASS_PERTURB = 0.05 # 5% Gaussian perturbation to the baseline mass matrix (modeling error)
+    MASS_PERTURB = 0.00 # 5% Gaussian perturbation to the baseline mass matrix (modeling error)
 
     folder_name = f"06Oct_Data_Noisy_E{n_elements}_Lvl{int(F_NOISE*1000)}_MassPerturb{int(MASS_PERTURB*100)}"
     data_file_path = os.path.join("Data", folder_name)

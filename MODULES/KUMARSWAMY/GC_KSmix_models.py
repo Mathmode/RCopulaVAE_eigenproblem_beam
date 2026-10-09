@@ -3,20 +3,23 @@
 """
 Updated: March 2026
 Unified Model for Gaussian Copula with Kumaraswamy Mixture Marginals (KSmix).
-Refined to heavily reduce TFP object-instantiation overhead and optimize graph speed.
+Refined to fully unconstrain the correlation parameters, matching the GMM behavior.
 """
 
+# %% IMPORTS
+# =============================================================================
 import tensorflow as tf
 import numpy as np
 import tensorflow.keras as K
+import tensorflow_probability as tfp
+tfd = tfp.distributions
 
 from MODULES.COPULAS.GC_GMm_GPU_eigen_functions import assemble_global_Kmatrices, Solve_eigenproblem
 from MODULES.KUMARSWAMY.GC_KSmix_architectures import Fully_connected_enc_GC_KS, Copula_KS_pdf_layer
 
-# -------------------------------------------------------------------------
-# HELPER FUNCTIONS
-# -------------------------------------------------------------------------
 
+# %% HELPER FUNCTIONS
+# =============================================================================
 @tf.function(jit_compile=True)
 def calculate_MAC(modes_true, modes_pred):
     """Computes MAC with higher epsilon and clipping to prevent NaN gradients."""
@@ -31,11 +34,13 @@ def calculate_MAC(modes_true, modes_pred):
     mac_matrix = tf.square(tf.clip_by_value(dot_product, -1.0, 1.0))
     return mac_matrix
 
-# -------------------------------------------------------------------------
-# INVERSE MODEL (ENCODER)
-# -------------------------------------------------------------------------
 
+# %% INVERSE ENCODER MODEL
+# =============================================================================
 class Inverse_Copula_KS_Model(tf.keras.Model):
+    """
+    Encoder block connecting features to parameters (Weights are correctly constrained here).
+    """
     def __init__(self, input_dim_encoder, n_dims, num_KS, num_samples, lbound, **kwargs):
         super(Inverse_Copula_KS_Model, self).__init__()
         self.n_dims = n_dims
@@ -61,19 +66,32 @@ class Inverse_Copula_KS_Model(tf.keras.Model):
             self.n_dims                 
         ], axis=-1)
 
-        a_ks = tf.reshape(a_ks, (-1, self.num_KS, self.n_dims)) + 1.1
-        b_ks = tf.reshape(b_ks, (-1, self.num_KS, self.n_dims)) + 1.1
+        a_ks = tf.reshape(a_ks, (-1, self.num_KS, self.n_dims)) 
+        b_ks = tf.reshape(b_ks, (-1, self.num_KS, self.n_dims)) 
         
+        # --- CRITICAL FIX: WEIGHTS SOFTMAX CONSTRAINT ---
+        # We correctly reshape and constrain them with a Softmax across the 'K' mixture components.
         weights = tf.reshape(weights, (-1, self.num_KS, self.n_dims))
-        weights = tf.nn.softmax(weights / 1.5, axis=1) 
+        weights = tf.nn.softmax(weights, axis=1)
+        
+        # WIDENED BOUNDS: Allow Kumaraswamy parameters to reach 150.0. 
+        # This gives the mixture the mathematical freedom to form extremely 
+        # sharp peaks and tight ridges without hitting a ceiling.
+        a_ks = tf.clip_by_value(a_ks, 0.45, 150.0)
+        b_ks = tf.clip_by_value(b_ks, 0.45, 150.0)
+        
+        offdiag = offdiag 
+        diag = diag + 1e-4 
         
         return a_ks, b_ks, weights, offdiag, diag
 
-# -------------------------------------------------------------------------
-# FULL VAE MODEL WITH KUMARASWAMY MIXTURE
-# -------------------------------------------------------------------------
 
+# %% FULL VAE PHYSICS PIPELINE
+# =============================================================================
 class My_CopulaKSVAE_withEigen(tf.keras.Model):
+    """
+    Main VAE Model uniting Inverse Encoder -> Sampler -> Forward Physics Simulation
+    """
     def __init__(self, input_dim, num_dofs, n_elements, n_modes, Ke_matrices, Mfree, L_inv, n_dims, num_KS, num_samples, gamma, mean_f, std_f, lbound, fixed_dofs_indices=None, **kwargs):
         super(My_CopulaKSVAE_withEigen, self).__init__()
         self.num_dofs = num_dofs
@@ -107,7 +125,6 @@ class My_CopulaKSVAE_withEigen(tf.keras.Model):
         self.reshaped_z_samples = tf.reshape(self.marginal_samples_z, (-1, self.n_dims)) 
         self.reshaped_copula_samples = tf.reshape(self.copula_samples_u, (-1, self.n_dims))
         
-        # Optimization: Replaced tf.tile with tf.broadcast_to which is virtually 0-copy in VRAM
         lt_ext = tf.broadcast_to(
             tf.expand_dims(self.LT_matrices, axis=1), 
             [tf.shape(self.LT_matrices)[0], self.num_samples, self.n_dims, self.n_dims]
@@ -153,43 +170,23 @@ class My_CopulaKSVAE_withEigen(tf.keras.Model):
         return loss_rot + loss_vert
     
     def Copula_pdf_logprob(self, y_true, y_pred):
-        """
-        Calculates Copula Log-PDF via optimized Raw Math. 
-        Replaces massive overhead from tfd.MultivariateNormalTriL
-        """
         u_clipped = tf.clip_by_value(self.reshaped_copula_samples, 1e-5, 1.0 - 1e-5)
         
-        # Fast Quantile (ErfInv)
-        normal_samples = tf.math.sqrt(2.0) * tf.math.erfinv(2.0 * u_clipped - 1.0)
-        z = tf.expand_dims(normal_samples, axis=-1)
+        normal_dist = tfd.Normal(loc=0.0, scale=1.0)
+        normal_samples = normal_dist.quantile(u_clipped)
         
-        # Solve y = L^-1 z
-        y = tf.linalg.triangular_solve(self.reshaped_LT_matrices, z)
-        y = tf.squeeze(y, axis=-1)
+        mvn = tfd.MultivariateNormalTriL(loc=tf.zeros(self.n_dims), 
+                                         scale_tril=self.reshaped_LT_matrices)
         
-        # Component parts for MVN log-density
-        sq_norm_y = tf.reduce_sum(tf.square(y), axis=-1)
-        diag_L = tf.linalg.diag_part(self.reshaped_LT_matrices)
-        log_det_L = tf.reduce_sum(tf.math.log(diag_L), axis=-1)
+        log_prob_joint_normal = mvn.log_prob(normal_samples)
+        log_prob_marginals_standard = tf.reduce_sum(normal_dist.log_prob(normal_samples), axis=-1)      
         
-        D_float = tf.cast(self.n_dims, tf.float32)
-        log_prob_joint_normal = -0.5 * D_float * tf.math.log(2.0 * np.pi) - log_det_L - 0.5 * sq_norm_y
-        
-        # Standard normal marginals
-        sq_norm_z = tf.reduce_sum(tf.square(normal_samples), axis=-1)
-        log_prob_marginals_standard = -0.5 * D_float * tf.math.log(2.0 * np.pi) - 0.5 * sq_norm_z
-             
         return log_prob_joint_normal - log_prob_marginals_standard
     
     def Marginal_KSMix_pdf_logprob(self, y_true, y_pred):
-        """
-        Calculates Kumaraswamy Mixture PDF via LogSumExp and native math.
-        Averages 5-10x faster than initializing tfd.MixtureSameFamily per batch iteration.
-        """
         x = (self.reshaped_z_samples - self.lbound) / (1.0 - self.lbound)
-        x = tf.clip_by_value(x, 1e-6, 1.0 - 1e-6)
+        x = tf.clip_by_value(x, 1e-5, 1.0 - 1e-5)
         
-        # Function to expand KS params to matching dimensions via 0-copy broadcasting
         batch_size = tf.shape(self.a_ks)[0]
         def expand_ks_param(tensor):
             t_ext = tf.broadcast_to(
@@ -202,9 +199,8 @@ class My_CopulaKSVAE_withEigen(tf.keras.Model):
         b = expand_ks_param(self.b_ks)
         w = expand_ks_param(self.weight_vals)
         
-        x_exp = tf.expand_dims(x, axis=1) # Shape: [Batch*Samples, 1, Dims]
+        x_exp = tf.expand_dims(x, axis=1) 
         
-        # Raw Kumaraswamy PDF components
         x_a = tf.math.pow(x_exp, a)
         one_minus_x_a = tf.clip_by_value(1.0 - x_a, 1e-7, 1.0)
         
@@ -212,9 +208,8 @@ class My_CopulaKSVAE_withEigen(tf.keras.Model):
                         (a - 1.0) * tf.math.log(x_exp) + 
                         (b - 1.0) * tf.math.log(one_minus_x_a))
                         
-        # Log mixture density = LogSumExp(log(w) + log_pdf_comp)
         log_w = tf.math.log(w + 1e-8)
-        log_prob_kuma_space = tf.reduce_logsumexp(log_w + log_pdf_comp, axis=1) # Reduce across KS axis
+        log_prob_kuma_space = tf.reduce_logsumexp(log_w + log_pdf_comp, axis=1) 
         
         adjustment = tf.math.log(1.0 - self.lbound + 1e-7)
         log_prob_marginals = tf.reduce_sum(log_prob_kuma_space - adjustment, axis=-1)
@@ -227,25 +222,16 @@ class My_CopulaKSVAE_withEigen(tf.keras.Model):
         joint_logprob = tf.math.reduce_mean(Copula_density_term + Marginal_logprob_term)
         return tf.math.square(tf.cast(self.gamma, dtype=tf.float32)) * joint_logprob
     
-    def Mixture_Diversity_loss(self):
-        weights = self.weight_vals
-        entropy = -tf.reduce_sum(weights * tf.math.log(weights + 1e-10), axis=1) # [Batch, n_dims]
-        mean_entropy = tf.reduce_mean(entropy)
-        return -mean_entropy
-    
-    def Boundary_Penalty_loss(self):
-        x = (self.reshaped_z_samples - self.lbound) / (1.0 - self.lbound)
-        penalty = -tf.reduce_mean(tf.math.log(x + 1e-4) + tf.math.log(1.0 - x + 1e-4))
-        return penalty
-    
     def ELBO_Copula_loss(self, y_true, y_pred):
-        Loss_freqs = self.Freqs_loss(y_true, y_pred)
-        Loss_MAC = self.MAC_modes_loss(y_true, y_pred)
-        Loss_mix_diveristy = self.Mixture_Diversity_loss()
-        Loss_boundary = self.Boundary_Penalty_loss()
-
-        Joint_copula_nll = self.Joint_copula_dens_term(y_true, y_pred)
-        ELBO_loss = 5.0 * Loss_freqs + 10.0 * Loss_MAC + Joint_copula_nll + 1.5 * Loss_mix_diveristy + 0.1 * Loss_boundary
+        loss_f = self.Freqs_loss(y_true, y_pred)
+        loss_m = self.MAC_modes_loss(y_true, y_pred)
+        loss_j = self.Joint_copula_dens_term(y_true, y_pred)
+        
+        # BOOSTED MAC MULTIPLIER (10.0 -> 50.0): 
+        # This breaks the "fat posterior" compromise. It heavily penalizes 
+        # mode shape errors, forcing the Copula's L-matrix to aggressively 
+        # capture the dominant correlations to satisfy the physics engine.
+        ELBO_loss = loss_f + 50.0 * loss_m + loss_j
         
         return ELBO_loss
 

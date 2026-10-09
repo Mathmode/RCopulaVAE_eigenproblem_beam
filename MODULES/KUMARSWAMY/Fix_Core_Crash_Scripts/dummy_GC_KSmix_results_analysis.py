@@ -10,20 +10,21 @@ import pandas as pd
 import tensorflow as tf
 import tensorflow.keras as K
 
-# Import new KS functions, properly referencing the corner plot
-from MODULES.KUMARSWAMY.GC_KSmix_functions_for_results_analysis import (
-    calculate_posterior_PDF_info, 
-    plot_corner_posterior,
-    plot_physical_pdf_profile, 
-    calculate_ks_mixture_metrics
+# Import new KS functions, including the newly added plot_random_2d_posteriors
+from MODULES.KUMARSWAMY.Fix_Core_Crash_Scripts.dummy_GC_KSmix_functions_for_results_analysis import (
+    calculate_posterior_PDF_info, plot_results_PDF_uncertainty,
+    plot_physical_pdf_profile, calculate_ks_mixture_metrics,
+    plot_random_2d_posteriors
 )
 from MODULES.PREPROCESSING.preprocessing import load_data, load_known_matrices
 from MODULES.COPULAS.GC_GMm_functions import build_correlation_matrices_from_cholesky
 from MODULES.KUMARSWAMY.GC_KSmix_uncertainty_quantification import calculate_and_plot_ks_calibration, enhanced_metrics_comparison 
 
 # --- Config ---
-filename = "T09Oct_GCop_3KSmx_5Els_5modes_MassPert5_0.45lb_Gamma0.4_5000ep"
-model_type_name  = 'REV_GCopulaKS_MULTIMODALITY'
+# filename = "u06Sept26_GCopKS_10Els_3KSmix_Gamma0.4_LR0.0001_10000epoch" # Update to folder name
+# model_type_name = 'KS_Copula'
+filename = "GCop_5Els_5modes_Nosiy2.5_MassPert5_0.45lbound_Gamma0.4_10000Epochs_lr1e-05"
+model_type_name  = 'REV_GCopula_MassPert'
 folder_path = os.path.join('Output', model_type_name, filename)
 lbound = 0.45
 
@@ -44,16 +45,16 @@ all_dofs = np.arange(n_dofs)
 free_dofs = np.delete(all_dofs, fixed_dofs)
 batch_size = 256
 
-# 1.2. plot the loss functions
+#1.2. plot the loss functions
 from MODULES.POSTPROCESSING.plot_losses import plot_trainval_loss, plot_freqsMACs_loss
-history_ = np.load(os.path.join(folder_path, "model_history.npy"), allow_pickle=True)
+history_ = np.load(os.path.join(folder_path, "model_history.npy"),allow_pickle = True)
 plot_trainval_loss(history_, folder_path)
 plot_freqsMACs_loss(history_, folder_path)
 
 # 2. Load Test Results
 Test_pred_props = np.load(os.path.join(folder_path, "Test_predicted_props.npy"), allow_pickle=True).item()
-
 # Unpack KS parameters
+# Expected keys: 'test_a', 'test_b', 'test_weight_vals', 'test_offdiag_elems', 'test_diag_elems'
 test_a = Test_pred_props['test_a']
 test_b = Test_pred_props['test_b']
 test_weights = Test_pred_props['test_weight_vals']
@@ -62,6 +63,7 @@ test_diag = Test_pred_props['test_diag_elems']
 
 # 3. Load Physics and Ground Truth Data
 data_folder = "06Oct_Data_Noisy_E5_Lvl25_MassPerturb5"
+# data_folder = "16Mar2026_Noisy_E10_level25_10modes"
 data_path = os.path.join("Data", data_folder)
 
 (Freqs_train, _, _, _, _, _, _, _, Freqs_test, Rot_test, Vert_test, Alphas_test, _, _) = load_data(data_path, batch_size)
@@ -99,38 +101,42 @@ physics_kwargs = {
 }
 
 # # --- Analysis Execution ---
-# print("\n--- KS-VAE Performance Metrics ---")
-# metrics, covered = calculate_ks_mixture_metrics(predicted_stats, test_datasets, lbound, physics_kwargs=physics_kwargs)
-# print("Metrics summary:")
-# for k, v in metrics.items():
-#     print(f"  {k}: {v}")
+print("\n--- KS-VAE Performance Metrics ---")
+metrics, covered = calculate_ks_mixture_metrics(predicted_stats, test_datasets, lbound, physics_kwargs=physics_kwargs)
+print("Metrics summary:")
+for k, v in metrics.items():
+    print(f"  {k}: {v}")
 
 # %%  --- Visualizing Specific Samples ---
 
-# positions = [0, 1, 2, 3, 7,  9, 11, 17, 25, 34, 45, 100, 138, 219, 234, 300, 343, 456, 555, 612, 690, 761]
-positions = [0, 1, 2, 3, 7,  9, 11, 17, 25, 34, 45, 100]
+positions = [ 815,  723 ] # Reduced for rapid confirmation
+
 n_samples = 4096
 
 for pos in positions:
     print(f"Processing Sample {pos}...")
     
-    # Gather necessary data using the calculation function (Now blazing fast!)
+    # Gather necessary data using the calculation function
     z_true, z_samples, post_weights = calculate_posterior_PDF_info(
-        n_samples, pos, test_datasets, predicted_stats, lbound
+        fixed_dofs, n_modes, beta, n_samples, pos, n_dofs, free_dofs, 
+        test_datasets, predicted_stats, L_inv, Ke_matrices, Mfree, 
+        mean_freq, std_freq, lbound, folder_path
     )
     
     print(f"Ground Truth for Sample {pos}: {z_true}")
     
     # -------------------------------------------------------------
-    # Plot the full 5D Corner Plot 
+    # Plot J randomly chosen 2D slices instead of the full corner plot 
+    # to maintain legibility for high dimensional outputs.
+    # We choose J=10 subplots arbitrarily here.
     # -------------------------------------------------------------
-    print(f"Plotting 5D Corner Plot for sample {pos}...")
-    plot_corner_posterior(
+    print(f"Plotting 10 Random 2D Posteriors for sample {pos}...")
+    plot_random_2d_posteriors(
         z_samples, post_weights, z_true, n_elements, pos, 
-        folder_path, lbound=lbound
+        folder_path, lbound=lbound, J=10
     )
     
-    # Optional Physical Profile graph
+    # Optionally, you can also keep the physical profile graph
     # print(f"Plotting Physical Profile for sample {pos}...")
     # plot_physical_pdf_profile(z_samples, post_weights, z_true, n_elements, pos, folder_path, lbound=lbound)
 

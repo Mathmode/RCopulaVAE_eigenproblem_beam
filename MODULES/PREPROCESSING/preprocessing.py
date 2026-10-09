@@ -41,7 +41,7 @@ def load_data(data_path, batch_size):
     Loads and standardizes frequency and modal data.
     Ensures standardization is consistent with the VAE Loss function.
     """
-    print(f"--- Loading 10-Element Dataset from: {data_path} ---")
+    print(f"--- Loading N-Element Dataset from: {data_path} ---")
     
     Freqs_true = np.load(os.path.join(data_path, "freqs_data_true.npy"))
     Rotmodes_true = np.load(os.path.join(data_path, "rotmodes_data_true.npy"))

@@ -14,9 +14,8 @@ import argparse
 # from main_GCopula_Surrogate import main
 # from main_MVNormal_VAE import main
 # from main_review_GMMfull import main
-
-
 # from main_GCop_KSmix import main
+
 from main_REV_GCopula import main
 
 

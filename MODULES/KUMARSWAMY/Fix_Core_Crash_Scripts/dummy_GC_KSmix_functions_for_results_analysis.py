@@ -5,11 +5,10 @@ Created on Tue Mar 24 15:53:56 2026
 @author: anafd
 """
 
-# %% IMPORTS & ENVIRONMENT SETUP
-# =============================================================================
 import os
 import random
 import numpy as np
+import gc
 import scipy.stats as stats
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
@@ -36,9 +35,6 @@ sns.set(style="whitegrid", rc={"axes.facecolor": "#f0f0f0", "grid.color": "gray"
 sns.set(style="dark")
 plot_configuration()
 
-
-# %% CORE STATISTICAL UTILITIES
-# =============================================================================
 def gaussian_copula(LT_matrix, n_dims, n_samples):
     """
     Generates uniform [0,1] samples using the Gaussian Copula.
@@ -107,9 +103,6 @@ def kumaraswamy_mixture_quantile(u, a, b, weights, lbound=0.45):
     res = tf.reshape(res, original_u_shape)
     return res
 
-
-# %% PHYSICS & METRICS EVALUATION
-# =============================================================================
 def calculate_MAC(modes_true, modes_pred):
     modes_true = tf.cast(modes_true, tf.float32)
     modes_pred = tf.cast(modes_pred, tf.float32)
@@ -152,6 +145,10 @@ def physics_engine_step(K_batch, L_inv_tf, n_modes, free_dofs, n_dofs):
 from MODULES.COPULAS.GC_GMm_GPU_eigen_functions import assemble_global_Kmatrices
 
 def calculate_ks_mixture_metrics(predicted_stats, test_datasets, lbound=0.45, physics_kwargs=None):
+    """
+    Calculates numerical metrics to evaluate the GC-VAE (Kumaraswamy Mixture) inference.
+    Correctly aligns the bounded prior log-density contribution without redundant cancellations.
+    """
     test_a = predicted_stats['test_a']           
     test_b = predicted_stats['test_b']           
     test_weights = predicted_stats['test_weights'] 
@@ -162,10 +159,11 @@ def calculate_ks_mixture_metrics(predicted_stats, test_datasets, lbound=0.45, ph
     num_KS = test_a.shape[1]
     n_dims = test_a.shape[2]
     
-    batch_size = 200
+    batch_size = 50
     n_mc_samples = 5000
     
-    all_true_log_probs, all_samp_log_probs = [], []
+    all_true_log_probs = []
+    all_samp_log_probs = []
     all_mse, all_mae = [], []
     all_coverage, all_sharpness = [], []
     all_z_phys_samp = []
@@ -173,9 +171,13 @@ def calculate_ks_mixture_metrics(predicted_stats, test_datasets, lbound=0.45, ph
     
     for i in range(0, N, batch_size):
         end_idx = min(i + batch_size, N)
-        b_a, b_b, b_w = test_a[i:end_idx], test_b[i:end_idx], test_weights[i:end_idx]
-        b_L, b_z_true = LT_matrix[i:end_idx], z_true[i:end_idx]
+        b_a = test_a[i:end_idx]
+        b_b = test_b[i:end_idx]
+        b_w = test_weights[i:end_idx]
+        b_L = LT_matrix[i:end_idx]
+        b_z_true = z_true[i:end_idx]
         
+        # --- 1. Point Estimate (Analytical Mean of Mixture) ---
         b_comp_means = b_b * beta_func(1 + 1/b_a, b_b) 
         b_pred_means_unit = np.sum(b_w * b_comp_means, axis=1)
         b_pred_means = lbound + (1.0 - lbound) * b_pred_means_unit
@@ -183,6 +185,7 @@ def calculate_ks_mixture_metrics(predicted_stats, test_datasets, lbound=0.45, ph
         all_mse.extend(np.mean(np.square(b_pred_means - b_z_true), axis=-1))
         all_mae.extend(np.mean(np.abs(b_pred_means - b_z_true), axis=-1))
 
+        # --- 2. Probabilistic Log-Likelihood & True z evaluation ---
         b_z_true_unit = (b_z_true - lbound) / (1.0 - lbound)
         b_z_true_unit = np.clip(b_z_true_unit, 1e-6, 1.0 - 1e-6)
         
@@ -199,9 +202,11 @@ def calculate_ks_mixture_metrics(predicted_stats, test_datasets, lbound=0.45, ph
         mvn = tfd.MultivariateNormalTriL(loc=tf.zeros(n_dims, dtype=tf.float32), scale_tril=tf.cast(b_L, tf.float32))
         log_c_true = mvn.log_prob(tf.cast(w_true, tf.float32)).numpy() - np.sum(stats.norm.logpdf(w_true), axis=1)
         
+        # Explicit marginal volume density normalization without redundant inverse offsetting
         joint_log_prob_true = log_c_true + np.sum(log_q_d_true, axis=1) - n_dims * np.log(1.0 - lbound)
         all_true_log_probs.extend(joint_log_prob_true)
 
+        # --- 3. MC Sampling for Calibration & KL ---
         w_samps = mvn.sample(n_mc_samples)
         w_samps = tf.transpose(w_samps, [1, 0, 2]) 
         u_samps = tfd.Normal(loc=0.0, scale=1.0).cdf(w_samps)
@@ -233,6 +238,10 @@ def calculate_ks_mixture_metrics(predicted_stats, test_datasets, lbound=0.45, ph
         log_c_samp = mvn.log_prob(tf.cast(w_samp, tf.float32)).numpy() - np.sum(stats.norm.logpdf(w_samp), axis=1)
         joint_log_prob_samp = log_c_samp + np.sum(log_q_d_samp, axis=1) - n_dims * np.log(1.0 - lbound)
         all_samp_log_probs.extend(joint_log_prob_samp)
+        
+        # Free memory aggressively inside the loop
+        tf.keras.backend.clear_session()
+        gc.collect()
 
     covered = np.concatenate(all_covered, axis=0)
     avg_log_prob = float(np.mean(all_true_log_probs))
@@ -240,6 +249,7 @@ def calculate_ks_mixture_metrics(predicted_stats, test_datasets, lbound=0.45, ph
     p_params = (3 * num_KS - 1) * n_dims + (n_dims * (n_dims - 1)) / 2
     BIC = -2 * avg_log_prob + (p_params * np.log(N)) / N
 
+    # Correct analytical prior log density matched directly to domain volume bounds
     log_prior = -n_dims * np.log(1.0 - lbound)
     KLtest = float(np.mean(np.array(all_samp_log_probs) - log_prior))
     
@@ -273,7 +283,7 @@ def calculate_ks_mixture_metrics(predicted_stats, test_datasets, lbound=0.45, ph
             
         Kfree_matrices = assemble_global_Kmatrices(Ke_matrices_dam, n_dims, N, fixed_dofs)
         
-        batch_size_pe = 256
+        batch_size_pe = 64
         all_f, all_rot, all_vert = [], [], []
         for i in range(0, N, batch_size_pe):
             f, r, v = physics_engine_step(Kfree_matrices[i : i + batch_size_pe], L_inv, n_modes, free_dofs, n_dofs)
@@ -305,30 +315,69 @@ def calculate_ks_mixture_metrics(predicted_stats, test_datasets, lbound=0.45, ph
 
     return metrics, covered
 
-
-# %% VISUALIZATION & PLOTTING FUNCTIONS
-# =============================================================================
-def calculate_posterior_PDF_info(n_samples, pos, test_datasets, predicted_stats, lbound):
+def plot_results_PDF_uncertainty(fixed_dofs_indices, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
+                                 predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq, lbound, folder_path):
     a_vals = predicted_stats['test_a'][pos]      
     b_vals = predicted_stats['test_b'][pos]      
     w_vals = predicted_stats['test_weights'][pos] 
     LT_matrix = predicted_stats['test_L_matrices'][pos] 
     
-    z_true = test_datasets['alpha_factors_true_test'][pos, :]
-    n_elements = LT_matrix.shape[-1]
+    Freqs_true = test_datasets['Freqs_true_test']
+    Rotmodes_true = test_datasets['Rotmodes_true_test']
+    Vertmodes_true = test_datasets['Vertmodes_true_test']
+    Alphas_true = test_datasets['alpha_factors_true_test']
+    z_true = Alphas_true[pos,:]
     
+    n_elements = LT_matrix.shape[-1]
+
+    L_inv_tf = tf.cast(L_inv, dtype=tf.float32)
     copula_samples = gaussian_copula(LT_matrix, n_elements, n_samples) 
     z_samples = kumaraswamy_mixture_quantile(copula_samples, a_vals, b_vals, w_vals, lbound=lbound)
-    
-    posterior_weights = np.ones(n_samples) / n_samples
-    
-    return z_true, z_samples.numpy(), posterior_weights
+    z_samples = tf.cast(z_samples, dtype=tf.float32)
 
-def plot_corner_posterior(z_samples, posterior_weights, z_true, n_elements, pos, folder_path, lbound=0.45):
-    x_filtered = z_samples
-    w_norm = posterior_weights
+    Ke_matrices_dam = tf.einsum('BE, EKQ -> BEKQ', z_samples, tf.cast(Ke_matrices, dtype=tf.float32))
+    Kfree_matrices = assemble_global_Kmatrices(Ke_matrices_dam, n_elements, n_samples, fixed_dofs_indices)
+    
+    batch_size_pe = 64
+    all_f, all_rot, all_vert = [], [], []
+    for i in range(0, n_samples, batch_size_pe):
+        f, r, v = physics_engine_step(Kfree_matrices[i : i + batch_size_pe], L_inv_tf, n_modes, free_dofs, n_dofs)
+        all_f.append(f)
+        all_rot.append(r)
+        all_vert.append(v)
+        
+    f_pred = np.concatenate(all_f, axis=0)
+    rot_pred = np.concatenate(all_rot, axis=0)
+    vert_pred = np.concatenate(all_vert, axis=0)
+    
+    obs_f_scaled = Freqs_true[pos]
+    pred_logscaled = (np.log(f_pred) - mean_freq) / std_freq
+    loss_f = np.mean(np.square(obs_f_scaled - pred_logscaled), axis=1)
 
-    fig, axes = plt.subplots(n_elements, n_elements, figsize=(16, 16), facecolor='white')
+    obs_r_batch = np.repeat(Rotmodes_true[pos][np.newaxis, :, :], n_samples, axis=0)
+    obs_v_batch = np.repeat(Vertmodes_true[pos][np.newaxis, :, :], n_samples, axis=0)
+    
+    rot_mac = calculate_MAC(obs_r_batch, rot_pred)
+    vert_mac = calculate_MAC(obs_v_batch, vert_pred)
+    loss_mac = np.mean((1.0 - rot_mac) + (1.0 - vert_mac), axis=1)
+    
+    inv_gamma_val = 1.0 / (beta**2)
+    exponent = -(loss_f + loss_mac) * inv_gamma_val
+    likelihood = np.exp(exponent - np.max(exponent))
+    posterior_weights = likelihood / np.sum(likelihood) 
+    
+    quantile_threshold = 0.95 
+    sorted_indices = np.argsort(posterior_weights)[::-1]
+    cumulative_weights = np.cumsum(posterior_weights[sorted_indices])
+    mask_indices = sorted_indices[cumulative_weights <= quantile_threshold]
+    
+    if len(mask_indices) < 30: mask_indices = sorted_indices[:100]
+
+    x_filtered = z_samples.numpy()[mask_indices]
+    w_filtered = posterior_weights[mask_indices]
+    w_norm = w_filtered / np.sum(w_filtered)
+
+    fig, axes = plt.subplots(n_elements, n_elements, figsize=(14, 14), facecolor='white')
     labels = [f'$z_{{{k+1}}}$' for k in range(n_elements)]
     cf = None
 
@@ -338,63 +387,97 @@ def plot_corner_posterior(z_samples, posterior_weights, z_true, n_elements, pos,
             if r == c:
                 vals = x_filtered[:, r]
                 kde1d = gaussian_kde(vals, weights=w_norm)
-                x_grid = np.linspace(lbound - 0.02, 1.02, 200)
+                x_grid = np.linspace(lbound-0.05, 1.0, 200)
                 y_grid = kde1d(x_grid)
-                
-                ax.fill_between(x_grid, y_grid, color='steelblue', alpha=0.5)
+                ax.fill_between(x_grid, y_grid, color='steelblue', alpha=0.4)
                 ax.plot(x_grid, y_grid, color='steelblue', lw=2)
-                
-                ax.text(0.5, 0.25, labels[r], fontsize=28, ha='center', va='center', 
-                        fontweight='bold', transform=ax.transAxes)
-                
-                ax.set_xlim(lbound, 1.0)
-                ax.set_yticks([])
-                ax.grid(False) 
-                
+                ax.text(0.5, 0.3, labels[r], fontsize=22, ha='center', va='center', fontweight='bold', transform=ax.transAxes)
+                ax.set_xlim(lbound, 1.0); ax.set_yticks([])
             elif r > c:
                 xi, yi = np.mgrid[lbound:1.0:60j, lbound:1.0:60j]
                 kernel = gaussian_kde(np.vstack([x_filtered[:, c], x_filtered[:, r]]), weights=w_norm)
                 zi = kernel(np.vstack([xi.flatten(), yi.flatten()])).reshape(xi.shape)
-                
-                cf = ax.contourf(xi, yi, zi, levels=24, cmap='viridis')
-                ax.plot(z_true[c], z_true[r], 'r*', markersize=16, markeredgecolor='white', label='Ground truth' if (r==1 and c==0) else "")
-                
-                ax.set_xlim(lbound, 1.0)
-                ax.set_ylim(lbound, 1.0)
-                ax.grid(False)
+                cf = ax.contourf(xi, yi, zi, levels=20, cmap='viridis')
+                ax.plot(z_true[c], z_true[r], 'r*', markersize=14, markeredgecolor='white', label='Truth')
+                ax.set_xlim(lbound, 1.0); ax.set_ylim(lbound, 1.0)
             else:
                 ax.axis('off')
 
             if r >= c:
                 ax.tick_params(labelsize=22)
-                if c == 0 and r != 0: 
-                    ax.set_ylabel(labels[r], fontsize=32)
-                else: 
-                    ax.tick_params(labelleft=False)
-                
-                if r == n_elements - 1: 
-                    ax.set_xlabel(labels[c], fontsize=32)
-                else: 
-                    ax.tick_params(labelbottom=False)
+                if c == 0 and r != 0: ax.set_ylabel(labels[r], fontsize=30)
+                else: ax.tick_params(labelleft=False)
+                if r == n_elements - 1: ax.set_xlabel(labels[c], fontsize=30)
+                else: ax.tick_params(labelbottom=False)
 
     if cf is not None:
-        cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7]) 
-        cbar = fig.colorbar(cf, cax=cbar_ax)
-        cbar.set_label('Predicted Posterior density (KS-VAE)', fontsize=22)
-        cbar.ax.tick_params(labelsize=20)
+        cbar = fig.colorbar(cf, ax=axes.ravel().tolist(), shrink=0.85, pad=0.06, anchor=(0.6, 1.3))
+        cbar.set_label('Posterior density (KS-VAE)', fontsize=18)
+        cbar.ax.tick_params(labelsize=18)
     
-    gt_marker = mlines.Line2D([], [], color='red', marker='*', linestyle='None', 
-                              markersize=20, markeredgecolor='white', label='Ground truth')
-    fig.legend(handles=[gt_marker], loc='upper right', bbox_to_anchor=(0.88, 0.88), 
-               fontsize=22, frameon=True, shadow=True, facecolor='#f0f0f0')
+    gt_marker = mlines.Line2D([], [], color='red', marker='*', linestyle='None', markersize=18, markeredgecolor='white', label='Ground truth')
+    fig.legend(handles=[gt_marker], loc='upper right', bbox_to_anchor=(0.82, 0.93), fontsize=18, frameon=True, shadow=True)
 
-    plt.subplots_adjust(left=0.08, right=0.88, top=0.95, bottom=0.08, wspace=0.1, hspace=0.1)
-    
-    save_dir = os.path.join(folder_path, "Corner_Posteriors_KS")
-    os.makedirs(save_dir, exist_ok=True)
-    plt.savefig(os.path.join(save_dir, f'Sample_{pos}_CornerPlot.png'), dpi=200, bbox_inches='tight')
+    plt.tight_layout(rect=[0, 0.03, 0.98, 0.95])
+    os.makedirs(os.path.join(folder_path, "Matched_Posteriors_KS"), exist_ok=True)
+    plt.savefig(os.path.join(folder_path, "Matched_Posteriors_KS", f'Sample_{pos}_Matched.png'), dpi=150)
     plt.show()
-    plt.close()
+    plt.close(fig)
+    gc.collect()
+    
+
+
+def calculate_posterior_PDF_info(fixed_dofs_indices, n_modes, beta, n_samples, pos, n_dofs, free_dofs, test_datasets,
+                                 predicted_stats, L_inv, Ke_matrices, Mfree, mean_freq, std_freq,  lbound, folder_path):
+    a_vals = predicted_stats['test_a'][pos]      
+    b_vals = predicted_stats['test_b'][pos]      
+    w_vals = predicted_stats['test_weights'][pos] 
+    LT_matrix = predicted_stats['test_L_matrices'][pos] 
+    
+    Freqs_true = test_datasets['Freqs_true_test']
+    Rotmodes_true = test_datasets['Rotmodes_true_test']
+    Vertmodes_true = test_datasets['Vertmodes_true_test']
+    z_true = test_datasets['alpha_factors_true_test'][pos,:]
+    
+    n_elements = LT_matrix.shape[-1]
+    
+    copula_samples = gaussian_copula(LT_matrix, n_elements, n_samples) 
+    z_samples = kumaraswamy_mixture_quantile(copula_samples, a_vals, b_vals, w_vals, lbound=lbound)
+    z_samples = tf.cast(z_samples, dtype=tf.float32)
+    
+    Ke_matrices_dam = tf.einsum('BE, EKQ -> BEKQ', z_samples, tf.cast(Ke_matrices, dtype=tf.float32))
+    Kfree_matrices = assemble_global_Kmatrices(Ke_matrices_dam, n_elements, n_samples, fixed_dofs_indices)
+     
+    L_inv_tf = tf.cast(L_inv, dtype=tf.float32)
+    batch_size = 64
+    all_f, all_rot, all_vert = [], [], []
+    for i in range(0, n_samples, batch_size):
+        f, r, v = physics_engine_step(Kfree_matrices[i : i + batch_size], L_inv_tf, n_modes, free_dofs, n_dofs)
+        all_f.append(f)
+        all_rot.append(r)
+        all_vert.append(v)
+        
+    f_pred = np.concatenate(all_f, axis=0)
+    rot_pred = np.concatenate(all_rot, axis=0)
+    vert_pred = np.concatenate(all_vert, axis=0)
+    
+    obs_f_scaled = Freqs_true[pos]
+    pred_logscaled = (np.log(f_pred) - mean_freq) / std_freq
+    loss_f = np.mean(np.square(obs_f_scaled - pred_logscaled), axis=1)
+
+    obs_r_batch = np.repeat(Rotmodes_true[pos][np.newaxis, :, :], n_samples, axis=0)
+    obs_v_batch = np.repeat(Vertmodes_true[pos][np.newaxis, :, :], n_samples, axis=0)
+    
+    rot_mac = calculate_MAC(obs_r_batch, rot_pred)
+    vert_mac = calculate_MAC(obs_v_batch, vert_pred)
+    loss_mac = np.mean((1.0 - rot_mac) + (1.0 - vert_mac), axis=1)
+    
+    inv_gamma_val = 1.0 / (beta**2)
+    exponent = -(loss_f + loss_mac) * inv_gamma_val
+    likelihood = np.exp(exponent - np.max(exponent))
+    posterior_weights = likelihood / np.sum(likelihood) 
+    
+    return z_true, z_samples.numpy(), posterior_weights
 
 def plot_physical_pdf_profile(z_samples, posterior_weights, z_true, n_elements, pos, folder_path, lbound=0.45):
     plt.rcParams.update({
@@ -436,4 +519,72 @@ def plot_physical_pdf_profile(z_samples, posterior_weights, z_true, n_elements, 
     os.makedirs(save_dir, exist_ok=True)
     plt.savefig(os.path.join(save_dir, f'Sample_{pos}_KS_UQ.png'), dpi=300)
     plt.show()
-    plt.close()
+    plt.close(fig)
+    gc.collect()
+
+def plot_random_2d_posteriors(z_samples, posterior_weights, z_true, n_elements, pos, folder_path, lbound=0.45, J=10):
+    """
+    Plots J randomly chosen 2D slices of the posterior PDF, effectively displaying
+    a manageable subset of the corner plot to avoid unreadable high-dimensional visualizations.
+    """
+    # 1. Filtering & Weight Normalization
+    quantile_threshold = 0.95 
+    sorted_indices = np.argsort(posterior_weights)[::-1]
+    cumulative_weights = np.cumsum(posterior_weights[sorted_indices])
+    mask_indices = sorted_indices[cumulative_weights <= quantile_threshold]
+    
+    if len(mask_indices) < 30: mask_indices = sorted_indices[:100]
+
+    x_filtered = z_samples[mask_indices]
+    w_filtered = posterior_weights[mask_indices]
+    w_norm = w_filtered / np.sum(w_filtered)
+    
+    # 2. Randomly select J pairs of unique dimensions
+    max_possible_pairs = (n_elements * (n_elements - 1)) // 2
+    J_actual = min(J, max_possible_pairs)
+    
+    # Collect all possible lower-triangle pairs (r > c)
+    all_pairs = [(r, c) for r in range(n_elements) for c in range(r)]
+    chosen_pairs = random.sample(all_pairs, J_actual)
+    
+    # 3. Dynamic layout configuration
+    cols = min(J_actual, 5) # Max 5 columns per row for readability
+    rows = int(np.ceil(J_actual / cols))
+    
+    fig, axes = plt.subplots(rows, cols, figsize=(5 * cols, 5 * rows), facecolor='white')
+    
+    if J_actual == 1:
+        axes = np.array([axes])
+    axes = axes.flatten()
+    
+    # 4. Iterating and plotting KDE contours
+    for idx, (r, c) in enumerate(chosen_pairs):
+        ax = axes[idx]
+        xi, yi = np.mgrid[lbound:1.0:60j, lbound:1.0:60j]
+        
+        kernel = gaussian_kde(np.vstack([x_filtered[:, c], x_filtered[:, r]]), weights=w_norm)
+        zi = kernel(np.vstack([xi.flatten(), yi.flatten()])).reshape(xi.shape)
+        
+        cf = ax.contourf(xi, yi, zi, levels=20, cmap='viridis')
+        ax.plot(z_true[c], z_true[r], 'r*', markersize=14, markeredgecolor='white', label='Truth' if idx == 0 else "")
+        
+        ax.set_xlim(lbound, 1.0)
+        ax.set_ylim(lbound, 1.0)
+        ax.set_xlabel(f'$z_{{{c+1}}}$', fontsize=22)
+        ax.set_ylabel(f'$z_{{{r+1}}}$', fontsize=22)
+        ax.tick_params(labelsize=18)
+        
+        if idx == 0:
+            ax.legend(loc='best', fontsize=16)
+
+    # 5. Hide any unused grid axes
+    for idx in range(J_actual, len(axes)):
+        axes[idx].axis('off')
+        
+    plt.tight_layout()
+    save_dir = os.path.join(folder_path, "Random_2D_Posteriors")
+    os.makedirs(save_dir, exist_ok=True)
+    plt.savefig(os.path.join(save_dir, f'Sample_{pos}_Random_{J_actual}_2D_Posteriors.png'), dpi=150)
+    plt.show()
+    plt.close(fig)
+    gc.collect()
