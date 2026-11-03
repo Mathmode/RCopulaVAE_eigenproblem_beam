@@ -35,8 +35,8 @@ plot_configuration()
     
 def plot_trainval_loss(model, folder_path):
     trainvalloss_plot_fig = plt.figure()
-    plt.yscale('log')
-    plt.xscale('log')
+    # plt.yscale('log')
+    # plt.xscale('log')
     plt.plot(model.history.history['loss'], color = 'black', linewidth = 1.5, linestyle ='--', label  = 'Train')
     plt.plot(model.history.history['val_loss'], color = 'darkgray', linewidth = 1.5, label = 'Validation')
     plt.legend(loc='lower left', fontsize=14)

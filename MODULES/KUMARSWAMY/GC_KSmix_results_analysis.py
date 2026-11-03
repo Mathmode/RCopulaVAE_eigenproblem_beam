@@ -20,8 +20,12 @@ from MODULES.COPULAS.GC_GMm_functions import build_correlation_matrices_from_cho
 from MODULES.KUMARSWAMY.GC_KSmix_uncertainty_quantification import calculate_and_plot_ks_calibration, enhanced_metrics_comparison 
 
 # --- Config ---
-filename = "26Mar_KSmixGCopula_5Els_5KSmix_Gamma0.35_LR1e-06_10000epoch" # Update to folder name
-model_type_name = 'KS_Copula'
+# filename = "26Mar_KSmixGCopula_5Els_5KSmix_Gamma0.35_LR1e-06_10000epoch" # Update to folder name
+# model_type_name = 'KS_Copula'
+
+filename = "13Oct_KSCop5Els_5KSmix_Gamma0.5_LR1e-05_5000ep_10samples"
+model_type_name = 'REV_GCopulaKS_MULTIMODALITY'
+
 folder_path = os.path.join('Output', model_type_name, filename)
 lbound = 0.45
 
@@ -63,7 +67,8 @@ test_offdiag = Test_pred_props['test_offdiag_elems']
 test_diag = Test_pred_props['test_diag_elems']
 
 # 3. Load Physics and Ground Truth Data
-data_folder = "01Mar2026_Noisy_E5_level25"
+# data_folder = "01Mar2026_Noisy_E5_level25"
+data_folder = "06Oct_Data_Noisy_E5_Lvl25_MassPerturb5"
 data_path = os.path.join("Data", data_folder)
 
 (Freqs_train, _, _, _, _, _, _, _, Freqs_test, Rot_test, Vert_test, Alphas_test, _, _) = load_data(data_path, batch_size)
@@ -101,12 +106,14 @@ print("Metrics summary:", metrics)
 # positions = [0, 1, 7, 9, 11, 17, 25, 34, 45, 100, 138, 219, 234, 343, 456, 555, 612, 690, 761]
 # positions  = [2,20,21,41,43,48,50,63, 64, 65, 77, 78, 91,92,98,99,102,560,576]
 # positions = [300,301,302,303,304,305,310,311,312,313,314,315,321,322,323]
-positions = [ 815,  723, 1318, 1077, 1228, 1396,  664, 1679,  689,  279, 1257,
-       1178,   30, 1707, 1182, 1772, 1398,  442,  120, 1500, 1349, 1360,
-        969,  383,  246,  510, 1455, 1586, 1776, 1787, 1100,  293, 1530,
-       1219,  743, 1163,  640,  745,  336,    3, 1282, 1299,  908,  459,
-        371, 1643, 1489, 1038, 1267,  455]
+# positions = [ 815,  723, 1318, 1077, 1228, 1396,  664, 1679,  689,  279, 1257,
+#        1178,   30, 1707, 1182, 1772, 1398,  442,  120, 1500, 1349, 1360,
+#         969,  383,  246,  510, 1455, 1586, 1776, 1787, 1100,  293, 1530,
+#        1219,  743, 1163,  640,  745,  336,    3, 1282, 1299,  908,  459,
+#         371, 1643, 1489, 1038, 1267,  455]
 
+# positions = [0, 1, 2, 3, 7,  9, 11, 17, 25, 34, 45, 100, 138, 219, 234, 300, 343, 456, 555, 612, 690, 761]
+positions = [0, 1, 2, 3, 7,  9, 11, 17, 25, 34, 45, 100]
 n_samples = 4096
 
 for pos in positions:

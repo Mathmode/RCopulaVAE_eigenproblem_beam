@@ -1,0 +1,16 @@
+{
+  "train_time_s": 7310.862207174301,
+  "epochs_run": 400,
+  "best_epoch": 398,
+  "best_val_monitor": -142.79357848170358,
+  "mean_epoch_time_s": 18.276850876808165,
+  "n_train": 30000,
+  "steps_per_epoch": 117,
+  "devices": [
+    "/physical_device:CPU:0"
+  ],
+  "platform": "Windows-10-10.0.26200-SP0",
+  "processor": "Intel64 Family 6 Model 197 Stepping 2, GenuineIntel",
+  "tensorflow": "2.21.0",
+  "anneal_epochs_run": 100
+}

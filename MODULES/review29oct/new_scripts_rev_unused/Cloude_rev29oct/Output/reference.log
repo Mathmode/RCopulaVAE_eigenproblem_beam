@@ -1,0 +1,44 @@
+﻿python.exe : WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+En línea: 1 Carácter: 409
++ ... _rev29oct"; & C:\Users\anafd\miniconda3\envs\tf_prob_gpu\python.exe - ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (WARNING: All lo...itten to STDERR:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+I0000 00:00:1793256390.711168   37200 port.cc:153] oneDNN custom operations are on. You may see slightly different 
+numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the 
+environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1793256400.208525   37200 port.cc:153] oneDNN custom operations are on. You may see slightly different 
+numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the 
+environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+  reference coarse/P0_healthy: 3 stages, acceptance 0.26, 15 s
+  reference coarse/P1_Z1_severe: 7 stages, acceptance 0.26, 37 s
+  reference coarse/P2_Z3_moderate: 6 stages, acceptance 0.26, 29 s
+  reference coarse/P3_Z2_mild: 5 stages, acceptance 0.26, 29 s
+  reference coarse/P4_BL: 7 stages, acceptance 0.26, 37 s
+  reference coarse/P5_Z1_BL: 9 stages, acceptance 0.25, 46 s
+  reference coarse/P6_Z2_Z4_BR: 10 stages, acceptance 0.25, 47 s
+  reference coarse/P7_five_sites: 11 stages, acceptance 0.26, 52 s
+  reference coarse/P8_Z1_Z5_BL: 11 stages, acceptance 0.25, 52 s
+  reference coarse/P9_Z3_BL_BR: 9 stages, acceptance 0.25, 46 s
+  reference fine/P0_healthy: 3 stages, acceptance 0.26, 22 s
+  reference fine/P1_Z1_severe: 7 stages, acceptance 0.26, 37 s
+  reference fine/P2_Z3_moderate: 6 stages, acceptance 0.26, 33 s
+  reference fine/P3_Z2_mild: 6 stages, acceptance 0.26, 32 s
+  reference fine/P4_BL: 7 stages, acceptance 0.26, 36 s
+  reference fine/P5_Z1_BL: 9 stages, acceptance 0.25, 40 s
+  reference fine/P6_Z2_Z4_BR: 10 stages, acceptance 0.25, 44 s
+  reference fine/P7_five_sites: 11 stages, acceptance 0.25, 49 s
+  reference fine/P8_Z1_Z5_BL: 11 stages, acceptance 0.25, 54 s
+  reference fine/P9_Z3_BL_BR: 9 stages, acceptance 0.25, 42 s
+  reference fine_bc/P0_healthy: 3 stages, acceptance 0.26, 18 s
+  reference fine_bc/P1_Z1_severe: 7 stages, acceptance 0.25, 32 s
+  reference fine_bc/P2_Z3_moderate: 6 stages, acceptance 0.26, 28 s
+  reference fine_bc/P3_Z2_mild: 5 stages, acceptance 0.26, 24 s
+  reference fine_bc/P4_BL: 7 stages, acceptance 0.26, 31 s
+  reference fine_bc/P5_Z1_BL: 9 stages, acceptance 0.25, 38 s
+  reference fine_bc/P6_Z2_Z4_BR: 10 stages, acceptance 0.25, 43 s
+  reference fine_bc/P7_five_sites: 11 stages, acceptance 0.25, 49 s
+  reference fine_bc/P8_Z1_Z5_BL: 11 stages, acceptance 0.25, 55 s
+  reference fine_bc/P9_Z3_BL_BR: 9 stages, acceptance 0.25, 44 s

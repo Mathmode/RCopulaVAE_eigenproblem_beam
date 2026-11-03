@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Created on Feb 2026
-Updated for Kumaraswamy Mixture Marginals
+Updated for Kumaraswamy Mixture Marginals - Stabilized
 """
 
 import os
@@ -53,7 +53,7 @@ def main():
     K.backend.set_floatx('float32')
     
     # --- DATA LOADING ---
-    data_folder = "01Mar2026_Noisy_E5_level25"
+    data_folder = "06Oct_Data_Noisy_E5_Lvl25_MassPerturb5"
     data_path = os.path.join("Data", data_folder)
     
     n_elements = 5
@@ -68,6 +68,10 @@ def main():
      Freqs_true_test, Rotmodes_true_test, Vertmodes_true_test, alpha_factors_true_test, 
      mean_f, std_f) = load_data(data_path, batch_size)
     
+    # Freqs_true_train, Rotmodes_true_train, Vertmodes_true_train, alpha_factors_true_train = Freqs_true_test[0:100,:], Rotmodes_true_test[0:100,:], Vertmodes_true_test[0:100,:], alpha_factors_true_test[0:100,:]
+    # Freqs_true_val, Rotmodes_true_val, Vertmodes_true_val, alpha_factors_true_val = Freqs_true_test[0:100,:], Rotmodes_true_test[0:100,:], Vertmodes_true_test[0:100,:], alpha_factors_true_test[0:100,:]
+    
+    
     Mfree, Ke_matrices, L_inv = load_known_matrices(data_path, n_elements)
     
     # --- MODEL CONFIGURATION ---
@@ -76,14 +80,14 @@ def main():
                  (Vertmodes_true_train.shape[1] * Vertmodes_true_train.shape[2]))
     
     n_modes = Freqs_true_train.shape[1]
-    n_epochs = 10000
-    base_lr = 1e-6
-    num_KS = 5  # Number of Kumaraswamy components
+    n_epochs = 5000 # Make sure to run this enough epochs for the decay to take effect
+    base_lr = 1e-5 
+    num_KS = 3  # Number of Kumaraswamy components
     n_dims = alpha_factors_true_train.shape[1]
-    num_samples = 1 
-    gamma = 0.4
+    num_samples = 10 # 
+    gamma = 0.50
     
-    filename = f"27Mar_increasedbouds_KSmixGCopula_{n_elements}Els_{num_KS}KSmix_Gamma{gamma}_LR{base_lr}_{n_epochs}epoch"
+    filename = f"14Oct_KSCop{n_elements}Els_{num_KS}KSmix_Gamma{gamma}_LR{base_lr}_{n_epochs}ep_{num_samples}samples"
     folder_path = os.path.join('Output', "KS_Copula", filename)
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
@@ -91,16 +95,25 @@ def main():
     # --- INITIALIZATION ---
     model = My_CopulaKSVAE_withEigen(
         input_dim=input_dim, num_dofs=n_dofs, n_elements=n_elements,
-        n_modes=n_modes, Ke_matrices=Ke_matrices, Mfree = Mfree, L_inv=L_inv, 
+        n_modes=n_modes, Ke_matrices=Ke_matrices, Mfree=Mfree, L_inv=L_inv, 
         n_dims=n_dims, num_KS=num_KS, num_samples=num_samples, 
         gamma=gamma, mean_f=mean_f, std_f=std_f, lbound=lbound, 
         fixed_dofs_indices=fixed_dofs_indices
     )
     
-    optim = K.optimizers.Adam(learning_rate=base_lr, clipnorm=0.5)
+    # Learning Rate Decay Schedule
+    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+        initial_learning_rate=1e-5,
+        decay_steps=1000, 
+        decay_rate=0.9,
+        staircase=False
+    )
     
-    # Force build
-    _ = model([Freqs_true_train[:1], Rotmodes_true_train[:1], Vertmodes_true_train[:1], alpha_factors_true_train[:1]])
+    # Update the optimizer to use the schedule while keeping clipnorm for safety
+    optim = K.optimizers.Adam(learning_rate=lr_schedule, clipnorm=0.1)
+
+    # Force build using a Tuple instead of a List
+    _ = model((Freqs_true_train[:1], Rotmodes_true_train[:1], Vertmodes_true_train[:1], alpha_factors_true_train[:1]))
     
     model.compile(
         optimizer=optim, 
@@ -111,17 +124,17 @@ def main():
     # --- TRAINING ---
     start_time = time.time()
     print("Starting Kumaraswamy Copula Training...")
-    delayed_stop = DelayedEarlyStopping(patience=500, start_epoch=5000)
+    delayed_stop = DelayedEarlyStopping(patience=1000, start_epoch=8000)
     
     model_history = model.fit(
-        x=[Freqs_true_train, Rotmodes_true_train, Vertmodes_true_train, alpha_factors_true_train],
-        y=[alpha_factors_true_train], # Dummy y
+        x=(Freqs_true_train, Rotmodes_true_train, Vertmodes_true_train, alpha_factors_true_train), # Swapped [] to ()
+        y=alpha_factors_true_train, # Removed brackets entirely for single dummy output
         batch_size=batch_size,
         epochs=n_epochs,
         shuffle=True,
         validation_data=(
-            [Freqs_true_val, Rotmodes_true_val, Vertmodes_true_val, alpha_factors_true_val], 
-            [alpha_factors_true_val], 
+            (Freqs_true_val, Rotmodes_true_val, Vertmodes_true_val, alpha_factors_true_val), # Swapped [] to ()
+            alpha_factors_true_val, # Removed brackets entirely
         ), callbacks=[delayed_stop]
     )
     
@@ -135,18 +148,16 @@ def main():
     ## with these lines we prevent having to load the trained model in the postprocessing, which was supisciously not working well (FIX)
     inverse_model = model.Encoder_model
     test_a, test_b, test_weight_vals, test_offdiag_elems, test_diag_elems = inverse_model.predict(
-        [Freqs_true_test, Rotmodes_true_test, Vertmodes_true_test, alpha_factors_true_test]
+        (Freqs_true_test, Rotmodes_true_test, Vertmodes_true_test, alpha_factors_true_test) # Swapped [] to ()
     )
     
     # --- 7. SAVING RESULTS ---    
     Problem_info = {'input_dim_enc': input_dim, 'n_dims': n_dims, 'num_KS': num_KS, 
                     'n_samples': num_samples, 'epochs': n_epochs, 'gamma': gamma, 'std_f':std_f, 'mean_f':mean_f}
     np.save(os.path.join(folder_path, 'Problem_info.npy'), Problem_info, allow_pickle=True)
-    np.save(os.path.join(folder_path, 'model_history.npy'), model_history.history, allow_pickle=True)   
     Test_predicted_properties = {'test_a': test_a, 'test_b': test_b, 'test_offdiag_elems': test_offdiag_elems, 
                     'test_diag_elems': test_diag_elems, 'test_weight_vals': test_weight_vals}
     np.save(os.path.join(folder_path, 'Test_predicted_props.npy'), Test_predicted_properties, allow_pickle=True)
-
     
     # --- PLOTTING ---
     try:

@@ -1,0 +1,323 @@
+{
+  "train": {
+    "run_name": "PIGCKS_fvr5_K3_beta1_H4_ep400",
+    "n_modes": 5,
+    "obs": "fvr",
+    "num_KS": 3,
+    "hidden": [
+      256,
+      256,
+      192
+    ],
+    "batch_size": 256,
+    "n_samples": 4,
+    "epochs": 400,
+    "anneal_epochs": 100,
+    "tau_min": 0.01,
+    "beta": 1.0,
+    "w_fwd": 0.0,
+    "lr": 0.001,
+    "lr_final": 1e-05,
+    "clipnorm": 1.0,
+    "patience": 80,
+    "val_every": 2,
+    "n_val_elbo": 1024,
+    "n_samples_val": 16,
+    "seed": 1234,
+    "n_train": 0,
+    "n_post_samples": 4000,
+    "eigh_on_cpu": true,
+    "jit_compile": false
+  },
+  "data_dir": "C:\\Users\\anafd\\Desktop\\Home\\Git Projects\\Revised_CopulaVAE_eigenproblem_beam\\MODULES\\Cloude_rev29oct\\Data",
+  "coarse_el_per_zone": 2,
+  "prior_weights": {
+    "healthy": 0.5,
+    "single_zone": 0.25,
+    "single_bearing": 0.1,
+    "zone_and_bearing": 0.05,
+    "two_zones": 0.05,
+    "three_sites": 0.02,
+    "broad": 0.03
+  },
+  "doe_weights": {
+    "healthy": 0.12,
+    "single_zone": 0.33,
+    "single_bearing": 0.18,
+    "zone_and_bearing": 0.12,
+    "two_zones": 0.1,
+    "three_sites": 0.12,
+    "broad": 0.03
+  },
+  "data_metadata": {
+    "beam": {
+      "L_total": 10.0,
+      "E": 210000000000.0,
+      "I": 8.33e-06,
+      "rho": 7850.0,
+      "Area": 0.005,
+      "n_zones": 5,
+      "kv0": 150000000.0,
+      "kr0": 5000000.0,
+      "n_modes_max": 5
+    },
+    "noise": {
+      "freq_std": 0.01,
+      "vert_rel_std": 0.025,
+      "rot_rel_std": 0.065
+    },
+    "coarse_el_per_zone": 2,
+    "variants": {
+      "coarse": {
+        "name": "coarse",
+        "el_per_zone": 2,
+        "mass_std": 0.0,
+        "stiffness_jitter": 0.0,
+        "noise_factor": 1.0
+      },
+      "fine": {
+        "name": "fine",
+        "el_per_zone": 10,
+        "mass_std": 0.02,
+        "stiffness_jitter": 0.025,
+        "noise_factor": 1.0
+      },
+      "fine_mass0": {
+        "name": "fine_mass0",
+        "el_per_zone": 10,
+        "mass_std": 0.0,
+        "stiffness_jitter": 0.025,
+        "noise_factor": 1.0
+      },
+      "fine_mass5": {
+        "name": "fine_mass5",
+        "el_per_zone": 10,
+        "mass_std": 0.05,
+        "stiffness_jitter": 0.025,
+        "noise_factor": 1.0
+      },
+      "fine_noise2": {
+        "name": "fine_noise2",
+        "el_per_zone": 10,
+        "mass_std": 0.02,
+        "stiffness_jitter": 0.025,
+        "noise_factor": 2.0
+      }
+    },
+    "datasets": {
+      "train": {
+        "variant": "coarse",
+        "n": 30000,
+        "sampler": "doe",
+        "seed": 101
+      },
+      "val": {
+        "variant": "coarse",
+        "n": 4000,
+        "sampler": "doe",
+        "seed": 202
+      },
+      "test_coarse": {
+        "variant": "coarse",
+        "n": 1000,
+        "sampler": "prior",
+        "seed": 303
+      },
+      "test_fine": {
+        "variant": "fine",
+        "n": 2000,
+        "sampler": "prior",
+        "seed": 404
+      },
+      "test_fine_balanced": {
+        "variant": "fine",
+        "n": 3000,
+        "sampler": "doe",
+        "seed": 505
+      },
+      "test_fine_mass0": {
+        "variant": "fine_mass0",
+        "n": 1000,
+        "sampler": "prior",
+        "seed": 606
+      },
+      "test_fine_mass5": {
+        "variant": "fine_mass5",
+        "n": 1000,
+        "sampler": "prior",
+        "seed": 707
+      },
+      "ood_four_sites": {
+        "variant": "fine",
+        "n": 500,
+        "sampler": "four_sites",
+        "seed": 808
+      },
+      "ood_noise2": {
+        "variant": "fine_noise2",
+        "n": 1000,
+        "sampler": "prior",
+        "seed": 909
+      }
+    },
+    "healthy": [
+      0.94,
+      1.0,
+      2.0,
+      1.0
+    ],
+    "damaged_prior": [
+      0.45,
+      1.0,
+      2.2,
+      1.1
+    ],
+    "damaged_doe": [
+      0.45,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "prior_weights": {
+      "healthy": 0.5,
+      "single_zone": 0.25,
+      "single_bearing": 0.1,
+      "zone_and_bearing": 0.05,
+      "two_zones": 0.05,
+      "three_sites": 0.02,
+      "broad": 0.03
+    },
+    "doe_weights": {
+      "healthy": 0.12,
+      "single_zone": 0.33,
+      "single_bearing": 0.18,
+      "zone_and_bearing": 0.12,
+      "two_zones": 0.1,
+      "three_sites": 0.12,
+      "broad": 0.03
+    },
+    "benchmarks": {
+      "P0_healthy": [
+        0.99,
+        0.98,
+        0.99,
+        0.99,
+        0.98,
+        0.99,
+        0.98
+      ],
+      "P1_Z1_severe": [
+        0.56,
+        0.98,
+        0.99,
+        0.98,
+        0.99,
+        0.98,
+        0.99
+      ],
+      "P2_Z3_moderate": [
+        0.98,
+        0.99,
+        0.65,
+        0.98,
+        0.99,
+        0.99,
+        0.98
+      ],
+      "P3_Z2_mild": [
+        0.99,
+        0.78,
+        0.98,
+        0.99,
+        0.98,
+        0.98,
+        0.99
+      ],
+      "P4_BL": [
+        0.98,
+        0.99,
+        0.98,
+        0.99,
+        0.98,
+        0.55,
+        0.98
+      ],
+      "P5_Z1_BL": [
+        0.68,
+        0.98,
+        0.99,
+        0.98,
+        0.99,
+        0.6,
+        0.98
+      ],
+      "P6_Z2_Z4_BR": [
+        0.98,
+        0.54,
+        0.98,
+        0.72,
+        0.98,
+        0.98,
+        0.64
+      ],
+      "P7_five_sites": [
+        0.62,
+        0.82,
+        0.55,
+        0.98,
+        0.74,
+        0.68,
+        0.98
+      ],
+      "P8_Z1_Z5_BL": [
+        0.64,
+        0.98,
+        0.99,
+        0.98,
+        0.76,
+        0.72,
+        0.98
+      ],
+      "P9_Z3_BL_BR": [
+        0.98,
+        0.98,
+        0.7,
+        0.98,
+        0.98,
+        0.58,
+        0.74
+      ]
+    },
+    "scale": 1.0,
+    "param_names": [
+      "Z1",
+      "Z2",
+      "Z3",
+      "Z4",
+      "Z5",
+      "BL",
+      "BR"
+    ],
+    "healthy_freqs_hz": [
+      6.680367053991881,
+      18.57999989101289,
+      36.67538633058591,
+      60.967687325135145,
+      91.5275988650973
+    ],
+    "sig_v": [
+      0.015968412840431382,
+      0.014038253304161525,
+      0.01603353425939173,
+      0.013549011534875498,
+      0.0162742472499793
+    ],
+    "sig_r": [
+      0.040049201044602106,
+      0.0370751118228168,
+      0.04229048664729918,
+      0.03705711833695472,
+      0.030878169983651876
+    ]
+  }
+}

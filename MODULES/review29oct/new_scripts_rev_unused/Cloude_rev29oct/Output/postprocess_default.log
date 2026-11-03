@@ -1,0 +1,60 @@
+﻿python.exe : WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+En línea: 1 Carácter: 409
++ ... _rev29oct"; & C:\Users\anafd\miniconda3\envs\tf_prob_gpu\python.exe - ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (WARNING: All lo...itten to STDERR:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+I0000 00:00:1793263754.615725   27216 port.cc:153] oneDNN custom operations are on. You may see slightly different 
+numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the 
+environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1793263768.844855   27216 port.cc:153] oneDNN custom operations are on. You may see slightly different 
+numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the 
+environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+Post-processing C:\Users\anafd\Desktop\Home\Git Projects\Revised_CopulaVAE_eigenproblem_beam\MODULES\Cloude_rev29oct\Output\PIGCKS_fvr5_K3_beta1_H4_ep400
+  val                    RMSE=0.0180 cov95 zones=0.927 bearings=0.928
+  test_coarse            RMSE=0.0154 cov95 zones=0.912 bearings=0.934 | q+IS cov95 zones=0.919 bearings=0.927 median ESS=24.6%
+  test_fine              RMSE=0.0179 cov95 zones=0.884 bearings=0.921 | q+IS cov95 zones=0.884 bearings=0.920 median ESS=23.1%
+  test_fine_bc           RMSE=0.0177 cov95 zones=0.892 bearings=0.923 | q+IS cov95 zones=0.887 bearings=0.919 median ESS=23.8%
+  test_fine_balanced     RMSE=0.0196 cov95 zones=0.893 bearings=0.919
+  test_fine_balanced_bc  RMSE=0.0195 cov95 zones=0.899 bearings=0.920
+  test_fine_mass0        RMSE=0.0162 cov95 zones=0.915 bearings=0.927
+  test_fine_mass0_bc     RMSE=0.0162 cov95 zones=0.918 bearings=0.929
+  test_fine_mass5        RMSE=0.0247 cov95 zones=0.779 bearings=0.891
+  test_fine_mass5_bc     RMSE=0.0241 cov95 zones=0.785 bearings=0.893
+  ood_four_sites         RMSE=0.0337 cov95 zones=0.897 bearings=0.871
+  ood_four_sites_bc      RMSE=0.0337 cov95 zones=0.900 bearings=0.866
+  ood_noise2             RMSE=0.0318 cov95 zones=0.767 bearings=0.839
+  ood_noise2_bc          RMSE=0.0310 cov95 zones=0.778 bearings=0.838
+  coarse/P0_healthy: energy distance 0.0005, max W1 0.0029, IS ESS 32.8 %
+  coarse/P1_Z1_severe: energy distance 0.0025, max W1 0.0113, IS ESS 14.7 %
+  coarse/P2_Z3_moderate: energy distance 0.0010, max W1 0.0084, IS ESS 22.6 %
+  coarse/P3_Z2_mild: energy distance 0.0007, max W1 0.0049, IS ESS 15.4 %
+  coarse/P4_BL: energy distance 0.0008, max W1 0.0075, IS ESS 0.8 %
+  coarse/P5_Z1_BL: energy distance 0.0023, max W1 0.0101, IS ESS 31.5 %
+  coarse/P6_Z2_Z4_BR: energy distance 0.0048, max W1 0.0134, IS ESS 14.6 %
+  coarse/P7_five_sites: energy distance 0.0122, max W1 0.0276, IS ESS 5.5 %
+  coarse/P8_Z1_Z5_BL: energy distance 0.0051, max W1 0.0156, IS ESS 15.0 %
+  coarse/P9_Z3_BL_BR: energy distance 0.0015, max W1 0.0090, IS ESS 1.9 %
+  fine/P0_healthy: energy distance 0.0004, max W1 0.0026, IS ESS 21.5 %
+  fine/P1_Z1_severe: energy distance 0.0021, max W1 0.0112, IS ESS 5.9 %
+  fine/P2_Z3_moderate: energy distance 0.0009, max W1 0.0084, IS ESS 9.2 %
+  fine/P3_Z2_mild: energy distance 0.0009, max W1 0.0058, IS ESS 28.6 %
+  fine/P4_BL: energy distance 0.0010, max W1 0.0077, IS ESS 5.1 %
+  fine/P5_Z1_BL: energy distance 0.0022, max W1 0.0093, IS ESS 11.3 %
+  fine/P6_Z2_Z4_BR: energy distance 0.0038, max W1 0.0130, IS ESS 7.2 %
+  fine/P7_five_sites: energy distance 0.0112, max W1 0.0249, IS ESS 6.5 %
+  fine/P8_Z1_Z5_BL: energy distance 0.0064, max W1 0.0190, IS ESS 4.1 %
+  fine/P9_Z3_BL_BR: energy distance 0.0015, max W1 0.0091, IS ESS 4.9 %
+  fine_bc/P0_healthy: energy distance 0.0005, max W1 0.0021, IS ESS 29.9 %
+  fine_bc/P1_Z1_severe: energy distance 0.0022, max W1 0.0113, IS ESS 14.8 %
+  fine_bc/P2_Z3_moderate: energy distance 0.0012, max W1 0.0089, IS ESS 27.3 %
+  fine_bc/P3_Z2_mild: energy distance 0.0007, max W1 0.0060, IS ESS 17.7 %
+  fine_bc/P4_BL: energy distance 0.0011, max W1 0.0079, IS ESS 18.7 %
+  fine_bc/P5_Z1_BL: energy distance 0.0016, max W1 0.0087, IS ESS 19.0 %
+  fine_bc/P6_Z2_Z4_BR: energy distance 0.0049, max W1 0.0142, IS ESS 0.2 %
+  fine_bc/P7_five_sites: energy distance 0.0112, max W1 0.0249, IS ESS 1.4 %
+  fine_bc/P8_Z1_Z5_BL: energy distance 0.0068, max W1 0.0180, IS ESS 1.3 %
+  fine_bc/P9_Z3_BL_BR: energy distance 0.0014, max W1 0.0087, IS ESS 1.8 %
+Done.
