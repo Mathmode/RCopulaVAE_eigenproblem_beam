@@ -43,12 +43,16 @@ import matplotlib.pyplot as plt
 from MODULES.review29oct_fixed import config as C
 from MODULES.review29oct_fixed.plotting import PAPER_RC, save_figure
 
-GROUPS = ["review29oct_fixed", "baseline_GaussCopula_GaussMarginals", "baseline_GaussMixture_K5"]
+GROUPS = ["review29oct_fixed", "baseline_GaussCopula_GaussMarginals", "baseline_GaussMixture_K5",
+          "variant_GaussCopula_GaussMixMarginals", "review29oct_fixed/baseline_GaussCopula_GaussMarginals",
+          "review29oct_fixed/baseline_GaussMixture_K5", "review29oct_fixed/variant_GaussCopula_GaussMixMarginals"]
 TEST_DIRS = {"A": "TestA_same_FE_model_10el", "B": "TestB_refined_FE_model_50el"}
 FAMILY_NAMES = {"GC-KS": "Gaussian copula + KS-mixture marginals (proposed)",
                 "GC-TN": "Gaussian copula + truncated-Gaussian marginals (Ref. 41, submitted version)",
-                "GMM": "Gaussian mixture, no copula (Ref. 39)"}
-COLORS = {"GC-KS": "#1F77B4", "GC-TN": "#D62728", "GMM": "#2CA02C"}
+                "GMM": "Gaussian mixture, no copula (Ref. 39)",
+                "GC-GMix": "Gaussian copula + truncated-Gaussian mixture marginals (variant)",
+                "GC-LogN": "Gaussian copula + truncated log-normal marginals (variant)"}
+COLORS = {"GC-KS": "#1F77B4", "GC-TN": "#D62728", "GMM": "#2CA02C", "GC-GMix": "#9467BD", "GC-LogN": "#8C564B"}
 
 
 def read_json(path):
@@ -72,7 +76,8 @@ def count_parameters(run):
     return total
 
 
-def collect_runs(data_name, runs=None):
+def collect_runs(data_name, runs=None, schedule=None, obs=None):
+    """Evaluated runs of a data set; schedule (cosine, plateau) and obs (fv, f) keep only the runs of that protocol."""
     out_root = os.path.join(C.PROJECT_ROOT, "Output")
     folders = []
     if runs:
@@ -92,6 +97,8 @@ def collect_runs(data_name, runs=None):
         info = np.load(pi_path, allow_pickle=True).item()
         if re.split(r"[\\/]", str(info["data_dir"]).rstrip("\\/"))[-1] != data_name:
             continue
+        if (schedule and info.get("schedule", "cosine") != schedule) or (obs and info.get("obs_types") != obs):
+            continue
         q = read_json(os.path.join(run, "Posterior_quality", "ELBO_summary.json"))
         if q is None:
             print(f"  (not evaluated yet, skipped: {os.path.basename(run)} -> run evaluate_posterior_quality.py)")
@@ -101,7 +108,8 @@ def collect_runs(data_name, runs=None):
                "K": int(info.get("n_components", info.get("num_KS", 1))), "seed": int(info.get("seed", 1234)),
                "parameters": int(info.get("trainable_parameters") or count_parameters(run)),
                "s_per_epoch": float(info["training_time_sec"]) / max(int(info["epochs_run"]), 1),
-               "best_epoch": int(info.get("best_epoch", 0)), "quality": q}
+               "best_epoch": int(info.get("best_epoch", 0)), "quality": q, "info": info,
+               "schedule": info.get("schedule", "cosine"), "obs": info.get("obs_types")}
         for t, sub in TEST_DIRS.items():
             row[f"metrics_{t}"] = read_json(os.path.join(run, sub, "Manuscript_Metrics.json"))
             gt = os.path.join(run, sub, "Benchmarks_VAE_vs_reference", "GT_vs_Posterior_Metrics.csv")
@@ -285,10 +293,15 @@ def main():
     parser.add_argument("--runs", nargs="*", default=None, help="run folders (default: every evaluated run)")
     parser.add_argument("--K", type=int, default=None, help="K of the proposed model in the R1.4 table "
                                                             "(default: the selected K*)")
+    parser.add_argument("--schedule", default="cosine", help="only runs of this schedule: cosine or plateau "
+                                                             "(see compare_convergence.py for the two together)")
+    parser.add_argument("--obs", default="fv", help="only runs with these observed quantities: fv or f")
     args, _ = parser.parse_known_args()
     out_dir = os.path.join(C.PROJECT_ROOT, "Output", "model_comparison", args.data)
+    if (args.schedule, args.obs) != ("cosine", "fv"):      # the default tables stay where they are
+        out_dir = os.path.join(out_dir, f"{args.schedule}_obs-{args.obs}")
     os.makedirs(out_dir, exist_ok=True)
-    rows = collect_runs(args.data, args.runs)
+    rows = collect_runs(args.data, args.runs, args.schedule, args.obs)
     print(f"{len(rows)} evaluated runs on {args.data}: " + ", ".join(r["run"] for r in rows))
     K_star, _ = select_ks_components(rows, out_dir)
     compare_families(rows, args.K or K_star or 3, out_dir)

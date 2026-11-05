@@ -131,12 +131,14 @@ rebuilt the numerical case study (Fig.~\ref{fig:bridge}, Table~\ref{tab:specs}) 
 are the following:
 \begin{enumerate}[leftmargin=*]
 \item \emph{Realistic structure and boundary conditions} (R2.2--R2.4). The structure is now a girder line of a
-single-span steel--concrete composite bridge (HEB~600 girder with a 0.22~m concrete slab, 1\,800~kg/m, $L=10$~m), whose
-first frequency (11.9~Hz) lies within the range given by EN~1991-2 for this span. It rests on laminated elastomeric
-bearings designed for its reactions, modelled by vertical and rotational springs at both ends, and each bearing has its
-own stiffness reduction factor. The vertical springs store 6--56\% of the modal strain energy, so bearing degradation
+single-span steel--concrete composite bridge (HEB~600 girder with a 0.22~m concrete slab, 1\,800~kg/m, $L=10$~m), with
+the proportions of a representative 10~m girder bridge (Moliner et al., 2017), whose first frequency (11.9~Hz) lies
+within the range given by EN~1991-2 for this span. It rests on laminated elastomeric bearings designed for its
+reactions, modelled at both ends by vertical springs, as in previous studies of bridges on elastomeric bearings
+(Moliner et al., 2017; Erduran et al., 2022), and by rotational springs; each bearing has its own stiffness reduction
+factor. The vertical springs store 6--56\% of the modal strain energy, so bearing degradation
 is identifiable from the vibrations of the deck. With the academic beam of the submitted version (first frequency
-3.3~Hz, outside the range of real bridges), any realistic bearing would have been effectively rigid
+3.3~Hz, below the EN~1991-2 band for this span), any realistic bearing would have been effectively rigid
 (Table~\ref{tab:old_new}). The latent space has seven variables: five deck zones and two bearings.
 \item \emph{Modelling uncertainty} (R1.1, R1.2, R3.1). Every measurement comes from an \emph{as-built} structure that
 differs from the nominal model embedded in the decoder: the mass of each 1~m segment deviates randomly by 5\% (standard
@@ -444,7 +446,8 @@ a standard deviation of 5\% of the peak amplitude to each mode-shape component.
 embedded in the decoder:
 \begin{itemize}[leftmargin=*]
 \item \emph{Mass}: the mass of each 1 m segment is multiplied by $1+\mu_s$, with $\mu_s\sim\mathcal{N}(0,0.05^2)$
-(non-structural mass, pavement, tolerances of the cross-sections).
+(non-structural mass, pavement, tolerances of the cross-sections). The uncertainty of the permanent loads is also
+considered in dynamic studies of short-span bridges (e.g., $\pm30\%$ of the ballast thickness in Moliner et al., 2017).
 \item \emph{Stiffness variability within each zone}: the flexibility of each 0.2 m cell is multiplied by
 $1+\varepsilon_c$, with $\varepsilon_c\sim\mathcal{N}(0,0.025^2)$ and zero mean inside each zone, so that the
 equivalent stiffness of the zone remains $z_k$.
@@ -674,7 +677,8 @@ data:
 \item \emph{Modelling error twice the assumed level}: 10\% mass and 5\% stiffness deviations.
 \item \emph{Systematic modelling error}: 5\% of additional mass not included in the model (e.g., a new surfacing layer).
 \item \emph{Bearings stiffer than nominal} (by a factor of 3, e.g., aged or partially seized pads), outside the support of
-the prior.
+the prior. Bearings may stiffen with age (Erduran et al., 2022), and the updated vertical stiffness of most bearings of
+an existing bridge exceeded its nominal value (El-Borgi et al., 2005).
 \end{enumerate}
 For each set, we report the metrics of R1.3, the detection and false-alarm rates, and the exact posteriors of 40 cases.
 Comparing the VAE with the exact posterior separates two effects: the misspecification of the Bayesian model itself,
@@ -831,7 +835,10 @@ vertical springs at the ends.
 \end{rcomment}
 
 \begin{response}
-We agree. The revised model replaces the simple supports by elastic bearings at both ends, each represented by a
+We agree. Most short and medium span bridges rest on elastomeric bearings, whose vertical flexibility is often neglected
+in practice although it lowers the natural frequencies and modifies the mode shapes, especially those of the higher
+modes (Zuk, 1962; Moliner et al., 2017; Erduran et al., 2022). The revised model replaces the simple supports by elastic
+bearings at both ends, each represented by a
 vertical spring $k_v$ and a rotational spring $k_r$ (Fig.~\ref{fig:bridge}); since no degree of freedom is removed, the
 model has $2(n_{\mathrm{el}}+1)$ DOFs. We also made the structure itself realistic. It is now a girder line of a
 single-span steel--concrete composite bridge (Table~\ref{tab:specs}): an HEB~600 girder with a $2.0\times0.22$~m C30/37
@@ -849,11 +856,12 @@ continuous bridge would only add bearing parameters to Eq.~\eqref{eq:Kz}.
 model more realistic. That beam ($I=8.33\times10^{-6}$~m$^4$, 39~kg/m) was an academic section rather than a bridge
 deck (Table~\ref{tab:old_new}):
 \begin{itemize}[leftmargin=*]
-\item its first frequency, 3.3~Hz, lies far below the range that EN~1991-2 gives for real bridges of a 10~m span
+\item its first frequency, 3.3~Hz, lies far below the band that EN~1991-2 gives for a 10~m span
 ($80/L=8.0$ to $94.76\,L^{-0.748}=16.9$~Hz);
 \item it deflects 28.7~mm ($L/350$) under its own weight only, whereas a bridge deck of this span deflects a few
 millimetres under permanent loads;
-\item its mass is 2\% of that of a real girder line, so the inertia, and thus the frequencies, were not representative.
+\item its mass is 2\% of that of the revised girder line, so the inertia, and thus the frequencies, were not
+representative.
 \end{itemize}
 With such a flexible deck, any realistic bearing is effectively rigid. A laminated pad sized for the small reactions of
 that beam is still 430 times stiffer than the deck ($k_{v0}=3.6\times10^{7}$~N/m against $48EI/L^3=8.4\times10^{4}$~N/m):
@@ -861,7 +869,8 @@ it compresses 0.05~mm under the permanent load, while the deck deflects 28.7~mm 
 store only 0.2--5.5\% of the modal strain energy, and a 55\% loss of stiffness of one bearing would change the
 frequencies by 0.7--1.9\%, below the identification noise (2.5\%). The bearing parameters would then be practically
 unidentifiable, not because bearings are invisible to vibration data, but because the deck was unrealistically
-flexible. We therefore replaced the beam by the girder line of a real deck, designed the bearings for its reactions, and
+flexible. We therefore replaced the beam by the girder line of a representative short-span deck, designed the bearings
+for its reactions, and
 checked that the result has the frequencies, deflections, and support stiffness of a short-span bridge.
 
 \begin{table}[H]
@@ -884,6 +893,9 @@ Mid-span deflection, permanent load & 28.7~mm ($L/350$) & 2.1~mm ($L/4\,800$) \\
 Bearing (laminated pad) & $S=3$, $k_{v0}=3.6\times10^{7}$~N/m & $200\times300$~mm, $S=7.5$, $k_{v0}=6.6\times10^{8}$~N/m \\
 Pad compression, permanent load & 0.05~mm & 0.13~mm \\
 $k_{v0}/(48EI/L^3)$ & 430 (bearings effectively rigid) & 12.5 \\
+$\kappa=EI\pi^3/(k_{v0}L^3)$; 0--0.1 in Moliner et al.\ (2017) & 0.0015 (practically rigid) & 0.052 \\
+$k_{v0}$; commercial bearings: $10^{5}$--$10^{7}$~kN/m (Erduran et al., 2022) & $3.6\times10^{4}$~kN/m (below) &
+$6.6\times10^{5}$~kN/m (within) \\
 Energy in the vertical springs & 0.2--5.5\% & 6.4--55.4\% \\
 Frequency change, $z_{b,L}=0.45$ & $-0.7$ to $-1.9$\% (below the noise) & $-2.0$ to $-12.3$\% \\
 \bottomrule
@@ -893,9 +905,12 @@ Frequency change, $z_{b,L}=0.45$ & $-0.7$ to $-1.9$\% (below the noise) & $-2.0$
 \textit{Effect of the bearings.} The sensitivity of the squared frequency of a mode to the stiffness of a spring equals
 the fraction of the modal strain energy stored in that spring. With realistic proportions, the vertical flexibility of
 the pads is not negligible compared with the bending flexibility of the deck ($k_{v0}$ is only 12.5 times larger than
-$48EI/L^3$): the vertical springs store 6--56\% of the strain energy of the five modes (Table~\ref{tab:bearing_energy}),
-and the bearings lower the first frequency from 12.29~Hz (simple supports) to 11.91~Hz. The pads are designed to let the
-girder rotate ($k_{r0}L/EI=0.007$), so the rotational springs store less than 0.3\% of the energy. Consequently, a 55\%
+$48EI/L^3$, i.e., $\kappa=0.05$): the vertical springs store 6--56\% of the strain energy of the five modes
+(Table~\ref{tab:bearing_energy}), and the bearings lower the first frequency from 12.29~Hz (simple supports) to
+11.91~Hz ($-3\%$). This agrees with Moliner et al.\ (2017), who report reductions close to 6\% of the first frequencies
+for $\kappa=0.1$, with the higher modes the most affected, and with Erduran et al.\ (2022), where the bearings change
+the higher modes first. The pads are designed to let the girder rotate ($k_{r0}L/EI=0.007$), as in beam models with free
+end rotations (Erduran et al., 2022), so the rotational springs store less than 0.3\% of the energy. Consequently, a 55\%
 loss of stiffness of one bearing changes the frequencies by 2.0--12.3\% and the mode shapes by up to 0.10 in
 $1-\mathrm{MAC}$, well above the identification noise (2.5\% and about $4\times10^{-3}$), and bearing degradation is
 identifiable from the vertical modes of the deck. For instance, the exact posterior of benchmark P4 (left bearing,
@@ -903,22 +918,89 @@ $z_{b,L}=0.55$) has mean 0.52 and standard deviation 0.03, against 0.16 for the 
 (Fig.~\ref{fig:bearing}). The bearing factor is identified through the vertical stiffness of the pad; the rotational
 stiffness has a negligible effect, as intended in the design of elastomeric bearings.
 
-\textit{Summary of the modelling assumptions.} (i) Euler--Bernoulli beam ($L/h\approx12$ with the slab). Shear deformation and rotary inertia are small for the
-first modes and would lower the highest frequencies by a few percent (mode 5 has half-waves of 2~m); since the same
-beam theory produces the data and the decoder, this does not affect the conclusions of the numerical study, and with
-field data it would be part of the model discrepancy of R1.2. (ii) Full composite action between girder and slab (shear connectors), with the slab transformed with the
-modular ratio $n=E_s/E_c=210/33$. (iii) One girder line: the vertical bending modes of a deck with several girders and
-a transverse distribution of the loads are represented by the stiffness and mass of one girder and its tributary slab.
-(iv) Linear, elastic bearings with vertical and rotational stiffness from the standard expressions for laminated pads;
-the longitudinal (shear) stiffness of the pads does not enter the vertical bending modes and is not modelled.
-(v) Damage is a loss of bending stiffness of a deck zone or a loss of vertical (and rotational) stiffness of a bearing.
-(vi) Modelling errors in the mass and in the stiffness inside each zone are included in all the data (R1.2). Which types
-of damage can and cannot be detected with this model is discussed in R2.3.
-\authornote{add references for the design of elastomeric bearings (EN~1337-3; AASHTO LRFD Section 14), for the effect
-of bearings on bridge dynamics, and EN~1991-2 for the frequency range. Table~\ref{tab:old_new}: confirm that the beam
-of the submitted version had $I=8.33\times10^{-6}$~m$^4$ and $A=0.005$~m$^2$ (values of the code in
-MODULES/review29oct); the ``+ elastic pads'' column is the intermediate model with pads sized for that beam
-($S=3$, $k_{r0}=6.8\times10^{4}$~N\,m/rad). Numbers recomputed with a 50-element Euler--Bernoulli model.}
+\textit{Modelling assumptions and supporting literature.} The model adopts the simplifications that are usual for the
+vertical dynamics of simply supported bridges on elastomeric bearings (Table~\ref{tab:lit}). Moliner et al.\ (2017) base
+their study of the effect of laminated elastomeric bearings on bridges of 10--25~m on a Bernoulli--Euler beam on
+vertical elastic supports, and
+describe the bearings by the ratio $\kappa=EI\pi^3/(K_vL^3)$ between the bending stiffness of the deck and the vertical
+stiffness of the supports, with values of 0 (rigid supports), 0.05 and 0.1, the latter being the most flexible support
+expected in these bridges. Erduran et al.\ (2022) model a railway bridge as an Euler--Bernoulli beam on vertical springs
+with free end rotations to study the effect of the bearing stiffness, and El-Borgi et al.\ (2005) represent the
+elastomeric bearings of an existing bridge by linear springs whose stiffness is updated from measured frequencies and
+mode shapes. Our girder line follows the same assumptions, and its parameters lie within the ranges of these studies:
+$\kappa=0.05$; $k_{v0}=6.6\times10^{5}$~kN/m, within the range of commercial elastomeric bearings
+($10^{5}$--$10^{7}$~kN/m, Erduran et al., 2022); and a cross-section with the proportions of the representative 10~m
+girder bridge (GB10) that Moliner et al.\ (2017) dimensioned from existing bridges, with girders 0.6~m deep spaced
+2.0~m apart and a 0.22~m slab of $f_{ck}=30$~MPa (their girders are of prestressed concrete, ours is a steel HEB~600).
+Four further simplifications are specific to our model:
+\begin{enumerate}[label=(\roman*),leftmargin=*]
+\item Shear deformation and rotary inertia are neglected, as in the beam models above. They would lower the highest
+frequencies by a few percent (mode 5 has half-waves of 2~m); since the same beam theory produces the data and the
+decoder, this does not affect the conclusions of the numerical study, and with field data it would be part of the model
+discrepancy of R1.2.
+\item Full composite action between girder and slab (shear connectors), with the slab transformed with the modular
+ratio $n=E_s/E_c=210/33$.
+\item One girder line: the vertical bending modes of a deck with several girders are represented by the stiffness and
+mass of one girder and its tributary slab. Torsional modes, which can be relevant in wide double-track decks (Moliner
+et al., 2017), are outside the scope of a planar model.
+\item The longitudinal (shear) stiffness of the pads does not enter the vertical bending modes and is not modelled.
+\end{enumerate}
+Modelling errors in the mass and in the stiffness inside each zone are included in all the data (R1.2). Which types of
+damage can and cannot be detected with this model is discussed in R2.3.
+
+\begin{table}[H]
+\centering\small
+\caption{Modelling decisions of the revised case study and their support in the literature.}
+\label{tab:lit}
+\footnotesize
+\begin{tabular}{>{\raggedright\arraybackslash}p{3.1cm}>{\raggedright\arraybackslash}p{4.3cm}%
+>{\raggedright\arraybackslash}p{7.4cm}}
+\toprule
+Decision & Revised case study & Literature \\
+\midrule
+Deck model & planar Euler--Bernoulli beam, vertical bending modes & Bernoulli--Euler beam on elastic supports (Zuk,
+1962; Moliner et al., 2017; Erduran et al., 2022) \\
+Bearings & linear vertical and rotational springs at both ends & laminated rubber bearings as an equivalent vertical
+stiffness (Moliner et al., 2017); vertical springs with free end rotations (Erduran et al., 2022); linear springs updated
+from modal data (El-Borgi et al., 2005) \\
+Vertical stiffness of a bearing & $k_{v0}=6.6\times10^{5}$~kN/m & commercial elastomeric bearings:
+$10^{5}$--$10^{7}$~kN/m (Erduran et al., 2022) \\
+Relative flexibility of the bearings & $\kappa=EI\pi^3/(k_{v0}L^3)=0.05$ & $\kappa=0$, 0.05 and 0.1 for spans of
+10--25~m (Moliner et al., 2017) \\
+Rotational stiffness & $k_{r0}L/EI=0.007$ (almost free rotation) & free end rotations (Erduran et al., 2022) \\
+Cross-section & steel HEB~600 girder (0.6~m), 0.22~m C30/37 slab, 2.0~m tributary width & bridge GB10: prestressed
+concrete girders 0.6~m deep spaced 2.0~m, 0.22~m slab of $f_{ck}=30$~MPa (Moliner et al., 2017) \\
+First frequency & 11.9~Hz, within the EN~1991-2 band & bridges dimensioned from existing structures lie within the
+same band (Moliner et al., 2017) \\
+Effect of the bearings & $-3\%$ on $f_1$, larger changes in the higher modes & close to $-6\%$ on the first
+frequencies for $\kappa=0.1$, higher modes most affected (Moliner et al., 2017; Erduran et al., 2022); larger effect in
+shorter spans (Zuk, 1962) \\
+Damage parameters & stiffness factors of the deck zones and the bearings & elastic modulus of the deck elements and
+bearing stiffness as updating parameters (El-Borgi et al., 2005); elastic modulus reduced by 10--20\% to represent
+cracking (Moliner et al., 2017); bearing deterioration detected from frequencies and MAC (Fayyadh and Abdul Razak,
+2012) \\
+Uncertain mass & 5\% per 1~m segment & variations of the permanent loads, $\pm30\%$ of the ballast (Moliner et al.,
+2017) \\
+\bottomrule
+\end{tabular}
+\end{table}
+\authornote{References from the folder Useful\_references, to add to the bibliography of the manuscript:
+(1) E.~Moliner, M.D.~Mart\'{\i}nez-Rodrigo, P.~Museros (2017), Dynamic performance of existing double track railway
+bridges at resonance with the increase of the operational line speed, Eng.\ Struct.\ 132, 98--109,
+doi:10.1016/j.engstruct.2016.11.031 (draft\_railway\_bridge.pdf is the author version of the same paper);
+(2) E.~Erduran, C.~Nordli, S.~Gonen (2022), Effect of elastomeric bearing stiffness on the dynamic response of railway
+bridges considering vehicle--bridge interaction, Appl.\ Sci.\ 12(23), 11952, doi:10.3390/app122311952;
+(3) S.~El-Borgi, S.~Choura, C.~Ventura, M.~Baccouch, F.~Cherif (2005), Modal identification and model updating of a
+reinforced concrete bridge, Smart Struct.\ Syst.\ 1(1), 83--101, doi:10.12989/sss.2005.1.1.083;
+(4) M.M.~Fayyadh, H.~Abdul Razak (2012), Condition assessment of elastic bearing supports using vibration data,
+Constr.\ Build.\ Mater.\ 30, 616--628, doi:10.1016/j.conbuildmat.2011.12.043;
+(5) W.~Zuk, Bridge vibrations as influenced by elastomeric bearings, Highway Research Board Bulletin 315 (check the year,
+probably 1962, and the pages, probably 27--34: not confirmed online).
+Still to add: EN~1337-3 and Roeder and Stanton (1983) for the stiffness of the pads, and EN~1991-2 (Fig.~6.10, the
+band for railway bridges also used by Moliner et al.) for the frequency band. Table~\ref{tab:old_new}: confirm that the beam of the submitted version had $I=8.33\times10^{-6}$~m$^4$ and
+$A=0.005$~m$^2$ (values of the code in MODULES/review29oct); the ``+ elastic pads'' column is the intermediate model with
+pads sized for that beam ($S=3$, $k_{r0}=6.8\times10^{4}$~N\,m/rad). Numbers recomputed with a 50-element
+Euler--Bernoulli model.}
 \end{response}
 
 \begin{table}[H]
@@ -966,7 +1048,12 @@ above, including the support conditions in the formulation, which can enable to 
 We have revised the parametrization in three ways.
 
 \textit{Support conditions.} As recommended, the stiffness of each bearing is now an unknown of the problem
-($z_{b,L}$, $z_{b,R}$), so the formulation represents damage at the supports. Three benchmark scenarios include bearing
+($z_{b,L}$, $z_{b,R}$), so the formulation represents damage at the supports. The bearing stiffness is a usual unknown in
+vibration-based assessment: El-Borgi et al.\ (2005) update the stiffness of the elastomeric bearings of an existing
+bridge, together with the elastic modulus of the deck, from measured frequencies and mode shapes, and Fayyadh and Abdul
+Razak (2012) detect the deterioration of the rubber bearings of a laboratory girder from the changes of its frequencies
+and MAC
+values. Three benchmark scenarios include bearing
 degradation (P4, P5 and P9), and the training data contain bearing damage alone and combined with deck damage. With
 realistic proportions, the bearings are identifiable (R2.2): in the exact posteriors of the benchmarks, the standard
 deviation of the bearing factors is 0.02--0.05, against 0.16 for the prior. Damage at a support and damage of the
@@ -999,17 +1086,25 @@ only be partly compensated by the adjacent end zone. When both are damaged, the 
 becomes correlated with that of the end zone (P5, Fig.~\ref{fig:testfine}), and the copula represents this dependence.
 \end{enumerate}
 
-This identifiability is a property of short, stiff spans, and we state its limits explicitly in the revised manuscript:
+This identifiability depends on the structure, and we state its limits explicitly in the revised manuscript:
 \begin{itemize}[leftmargin=*]
-\item \emph{Span.} The ratio between the stiffness of the pad and the bending stiffness of the deck, $k_{v0}/(48EI/L^3)$,
-grows with $L^3$. With the same section and pads, it is 12.5 for $L=10$~m, 100 for 20~m and 340 for 30~m; the share of
-the strain energy in the springs drops to 0.8--26\% and 0.2--7\%, and a 55\% loss of stiffness of one bearing changes
-the frequencies by at most 7.6\% and 2.3\%, respectively. For longer spans, the bearings become almost rigid for the
-vertical modes, as for the beam of the submitted version (Table~\ref{tab:old_new}).
+\item \emph{Relative flexibility of deck and bearings.} The influence of the bearings on the vertical modes, and hence
+their identifiability, is governed by $\kappa=EI\pi^3/(k_vL^3)$ (Moliner et al., 2017). For our girder line,
+$\kappa=0.05$, the intermediate value of the range 0--0.1 considered by Moliner et al.\ (2017) for bridges of 10--25~m.
+For a given section and bearing, $\kappa$ decreases with $L^3$: with the same section and pads, $\kappa=0.0065$ for
+$L=20$~m and 0.0019 for 30~m; the share of the strain energy in the springs drops to 0.8--26\% and 0.2--7\%, and a 55\%
+loss of stiffness of one bearing changes the frequencies by at most 7.6\% and 2.3\%, respectively. This agrees with the
+larger effect of elastomeric bearings in shorter spans reported by Zuk (1962). When the bearings are much stiffer than
+the deck (small $\kappa$), the deck behaves as rigidly supported for the vertical modes (Erduran et al., 2022), like the
+beam of the submitted version ($\kappa=0.0015$, Table~\ref{tab:old_new}), and the bearings cannot be identified from
+vertical modal data.
 \item \emph{Damage mechanisms of real bearings.} The most frequent defects of elastomeric and sliding bearings, such as
 hardening of the elastomer with age and low temperature, cracking or delamination of the rubber layers, slipping or
 walking of the pad, and seized sliding or guided bearings, mainly change the \emph{shear (longitudinal)} stiffness and the
-rotational behaviour of the bearing, and hardly change its vertical stiffness. The longitudinal stiffness does not enter
+rotational behaviour of the bearing, and hardly change its vertical stiffness. The properties of the bearings change
+during the service life, and the bearings may soften or stiffen (Erduran et al., 2022); in the updated model of an
+existing bridge, most bearings were vertically stiffer than their nominal value (El-Borgi et al., 2005). The
+longitudinal stiffness does not enter
 the vertical bending modes, and the rotational springs store less than 0.3\% of their energy, so these defects are not
 observable with the features of this study. Defects that stiffen the bearing lie outside the prior; their effect is
 examined in R1.5.
@@ -1028,7 +1123,8 @@ equivalent bending stiffness of 2~m damage zones, which is independent of the me
 decoder, ten in the 50-element model). This is the spatial resolution that five accelerometers and five modes can
 provide (R3.4). In reinforced-concrete decks, flexural cracking spreads over a region of the span, and the reduction of
 the equivalent stiffness of that region is the usual representation in vibration-based model updating (e.g., Teughels
-et al., 2002); in steel girders, a loss of section by corrosion, frequent near the supports, or a local defect reduce
+et al., 2002; El-Borgi et al., 2005), and dynamic analyses of short-span decks reduce the elastic modulus by 10--20\% to
+account for cracking (Moliner et al., 2017); in steel girders, a loss of section by corrosion, frequent near the supports, or a local defect reduce
 the equivalent stiffness of the zone that contains them.
 
 \textit{Localized damage inside the zones.} To test this representation when the actual damage is localized, the second
@@ -1044,8 +1140,8 @@ D.~Pardo (2020), Bearing assessment tool for longitudinal bridge performance, J.
 1023--1036, doi:10.1007/s13349-020-00432-1, and references for the damage mechanisms of bearings (e.g., NCHRP reports on
 bearing condition, EN~1337-3). (ii) The P4 interval (0.47--0.60) and the healthy range (0.8--1.0) are read from the
 violin plots of the 3KS run (TestA, Sample\_0 and Sample\_4); replace them with the exact values of the final tables.
-(iii) The span study uses the same section for 20 and 30~m (illustrative: a longer span would have a deeper section,
-but $EI/L^3$ still decreases). (iv) Add the same discussion of scope to the manuscript (case study and conclusions).}
+(iii) The span study keeps the section and the pads of the 10~m girder line (illustrative: a longer span has a deeper
+section and larger bearings, so $\kappa$ must be computed for each bridge). (iv) Add the same discussion of scope to the manuscript (case study and conclusions).}
 
 \textit{Interconnectedness of damage scenarios.} The correlations captured by the copula reflect how the modal data
 constrain combinations of parameters: adjacent zones are negatively correlated because a softer zone can be partly
@@ -1070,8 +1166,9 @@ frequencies, on elastomeric bearings designed for its reactions, with seven unkn
 It uses a 10-element decoder model, modelling errors (mass and stiffness deviations) in all the data, a second test set
 from a 50-element model with localized damage, six additional test sets outside the training distribution (R1.5), a
 realistic sensor layout with five accelerometers, and the first five bending modes identified with realistic noise.
-The structure was checked against the properties of real short-span bridges: first frequency within the range of
-EN~1991-2, deflection and pad compression under permanent loads, and bearing stress under traffic loads
+The structure was checked against the literature on short-span bridges (Table~\ref{tab:lit}) and against basic design
+checks: first frequency within the band of EN~1991-2, deflection and pad compression under permanent loads, and bearing
+stress under traffic loads
 (Table~\ref{tab:old_new} and R2.2). R2.3 discusses which types of damage this model can and cannot identify.
 \end{response}
 \authornote{validation on a laboratory-scale beam still pending; otherwise, discuss it as a limitation and future

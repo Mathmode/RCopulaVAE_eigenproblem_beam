@@ -10,6 +10,8 @@ differ only in the family of the approximate posterior q(z | m):
 | Proposed (K components) | `MODULES/review29oct_fixed` | Gaussian copula + mixtures of K Kumaraswamy distributions |
 | Baseline 1 (Ref. 41, submitted version) | `MODULES/baseline_GaussCopula_GaussMarginals` | Gaussian copula + one truncated Gaussian per marginal |
 | Baseline 2 (Ref. 39) | `MODULES/baseline_GaussMixture_K5` | Gaussian mixture, K = 5 full-covariance components (logit space of the box), no copula |
+| Variant (K components) | `MODULES/variant_GaussCopula_GaussMixMarginals` | Gaussian copula + mixtures of K truncated Gaussians |
+| Variant | `MODULES/baseline_GaussCopula_GaussMarginals` (`GCLogN_model.py`) | Gaussian copula + one Gaussian in ln z (truncated log-normal) |
 
 ## Files
 
@@ -58,3 +60,50 @@ run folders to the PC and run:
 ```bash
 python MODULES/model_comparison/compare_models.py --data 03Nov_FINAL_GirderBearings_7D_5sensors_5modes
 ```
+
+`compare_models.py` uses by default only the runs with the fixed cosine schedule and frequencies + shapes
+(`--schedule`, `--obs` select others), so the runs below do not enter the K selection by accident.
+
+## Train-to-convergence protocol (`run_convergence_gpu.sh`, `compare_convergence.py`)
+
+Why: the runs above have a fixed budget of 1500 epochs, and one budget does not separate quality from cost. Besides, the
+-ELBO logged by Keras on the validation set is noisy. At fixed weights its Monte Carlo error is 0.018 nats for GC-TN (its
+entropy is analytic, so the error of E_q[NLL] is not compensated) against 0.006 for the KS model and 0.005 for the GMM. In
+the 1500-epoch GC-TN run a dip of that noise at epoch 910 (recorded 23.800, true level about 23.85) stopped the training
+at epoch 1210 and those weights were restored, at a learning rate of 1.7e-4.
+
+Rule, the same for every family (`--schedule plateau`, `GC_KSmix_models.ConvergenceController`):
+
+* learning rate 5e-4; warm-up and everything else as before;
+* every 20 epochs after the warm-up the validation -ELBO is estimated with the numpy estimator of
+  `evaluate_posterior_quality.py` (mean log w, 20 samples of q per observation, the same random numbers each time): Monte
+  Carlo error 0.001-0.004 nats, 3-5 s per evaluation, not counted as training time. The best weights are kept;
+* the learning rate is halved after 200 epochs without an improvement larger than 0.002 nats; at 1e-5 (the end of the
+  cosine schedule) the same condition stops the training. `--max-epochs` is only a cap (default 6000; `converged` in
+  `Problem_info.npy` says whether the rule was met).
+
+`model_history` gets `epoch_time_s` (all runs from now on) and `monitor_neg_elbo`. Run names: `..._obs-<obs>_Gamma1.0_Conv<cap>`,
+so they never overwrite the `Ep1500` runs. `--obs f` trains on the frequencies only, with the same data set.
+
+```bash
+nohup bash MODULES/model_comparison/run_convergence_gpu.sh --family ks --ks 3 --obs fv --gpu 0 > conv_KS3_fv.log 2>&1 &
+nohup bash MODULES/model_comparison/run_convergence_gpu.sh --family gctn --obs fv --gpu 1 > conv_GCTN_fv.log 2>&1 &
+nohup bash MODULES/model_comparison/run_convergence_gpu.sh --family gmm --components 5 --obs fv --gpu 2 > conv_GMM5_fv.log 2>&1 &
+```
+
+Clean time per epoch (one at a time, on a GPU with nothing else running; written to `Output/model_comparison/timing/`):
+
+```bash
+bash MODULES/model_comparison/run_convergence_gpu.sh --family ks --ks 3 --gpu 0 --timing
+bash MODULES/model_comparison/run_convergence_gpu.sh --family gctn --gpu 0 --timing
+bash MODULES/model_comparison/run_convergence_gpu.sh --family gmm --components 5 --gpu 0 --timing
+```
+
+Then, with the run folders together (`--obs f` for the frequency-only runs):
+
+```bash
+python MODULES/model_comparison/compare_convergence.py --data 03Nov_FINAL_GirderBearings_7D_5sensors_5modes --obs fv
+```
+
+`marginal_shape_study.py`: why more Kumaraswamy components help on unimodal posteriors (best fit of every family to the exact
+marginals, no training).

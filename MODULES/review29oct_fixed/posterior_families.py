@@ -11,6 +11,7 @@ interface, so that postprocessing.py computes every metric with the same code fo
                 (MODULES/baseline_GaussCopula_GaussMarginals)
   GaussMixture  Ref. 39: mixture of K Gaussians with full covariance, written in the logit space of the prior box
                 (MODULES/baseline_GaussMixture_K5)
+  GMixCopula    variant: Gaussian copula + mixtures of K truncated Gaussians (MODULES/variant_GaussCopula_GaussMixMarginals)
 
 Densities live on the unit cube u = (z - lbound) / (1 - lbound) in [0, 1]^D; methods that return z say so.
 family_from_preds() recognises the family from the keys of a Test_predicted_props*.npy file. The formulas of
@@ -266,6 +267,67 @@ class TNCopula(_GaussianCopulaFamily):
         return np.clip(mu + sig * xi, 0.0, 1.0)
 
 
+class LogNCopula(_GaussianCopulaFamily):
+    """Marginal d: y = ln z ~ N(m_d, s_d^2) truncated to [ln lbound, 0], a truncated log-normal in z. The location may lie
+    outside the support (baseline_GaussCopula_GaussMarginals/GCLogN_model.py), so Z and the CDF are computed from the tails."""
+    name = "GC-LogN"
+    label = "Gaussian copula + truncated log-normal marginals"
+    short = "Gaussian-copula VAE (truncated log-normal marginals)"
+
+    def __init__(self, loc, scale, offdiag, diag, lbound):
+        super().__init__(lbound)
+        self.m, self.s = np.asarray(loc, np.float64), np.asarray(scale, np.float64)          # (N, D), in ln z
+        self.n, self.d = self.m.shape
+        self.alpha, self.beta = (np.log(self.lbound) - self.m) / self.s, -self.m / self.s
+        self.Pa, self.Qb = ndtr(self.alpha), ndtr(-self.beta)                                # mass below / above
+        self.Z = np.where(self.alpha > 0.0, ndtr(-self.alpha) - self.Qb, ndtr(self.beta) - self.Pa)
+        self._set_copula(offdiag, diag)
+
+    def _cdf(self, u, m, s, Pa, Qb, Z):
+        xi = (np.log(self.to_z(u)) - m) / s
+        return np.clip(np.where(xi < 0.0, (ndtr(xi) - Pa) / Z, 1.0 - (ndtr(-xi) - Qb) / Z), 0.0, 1.0)
+
+    def _pdf(self, u, m, s, Z):
+        """Density on the unit interval: TN(ln z) / z * (1 - lbound)."""
+        z = self.to_z(u)
+        return np.exp(-0.5 * ((np.log(z) - m) / s) ** 2 - 0.5 * LOG_2PI) / (s * Z) * (1.0 - self.lbound) / z
+
+    def cdf(self, u):
+        return self._cdf(u, self.m, self.s, self.Pa, self.Qb, self.Z)
+
+    def pdf(self, u):
+        return self._pdf(u, self.m, self.s, self.Z)
+
+    def cdf_grid(self, sl, x):
+        return self._cdf(x, *(v[sl][..., None] for v in (self.m, self.s, self.Pa, self.Qb, self.Z)))
+
+    def pdf_grid(self, sl, x):
+        return self._pdf(x, *(v[sl][..., None] for v in (self.m, self.s, self.Z)))
+
+    def moments(self):
+        """Mean and standard deviation in unit space, from E[z^n] of the truncated log-normal."""
+        def raw(n):
+            a, b = self.alpha - n * self.s, self.beta - n * self.s
+            mass = np.where(a > 0.0, ndtr(-a) - ndtr(-b), ndtr(b) - ndtr(a))
+            return np.exp(n * self.m + 0.5 * (n * self.s) ** 2) * mass / self.Z
+        m1, m2 = raw(1), raw(2)
+        return (m1 - self.lbound) / (1.0 - self.lbound), np.sqrt(np.maximum(m2 - m1 ** 2, 1e-12)) / (1.0 - self.lbound)
+
+    def marginal_cdf_samples(self, u, idx):
+        return self._cdf(u, *(v[idx][:, None] for v in (self.m, self.s, self.Pa, self.Qb, self.Z)))
+
+    def marginal_pdf_samples(self, u, idx):
+        return self._pdf(u, *(v[idx][:, None] for v in (self.m, self.s, self.Z)))
+
+    def marginal_ppf(self, v, idx):
+        """Inverse CDF; the lower or the upper tail formula is used so that ndtri never sees 1 - tiny."""
+        m, s, Pa, Qb, Z = (v_[idx][:, None] for v_ in (self.m, self.s, self.Pa, self.Qb, self.Z))
+        p_low = Pa + v * Z
+        p_up = Qb + (1.0 - v) * Z
+        xi = np.where(p_low < 0.5, ndtri(np.minimum(p_low, 0.5)), -ndtri(np.minimum(p_up, 0.5)))
+        return np.clip((np.exp(m + s * xi) - self.lbound) / (1.0 - self.lbound), 0.0, 1.0)
+
+
 # =============================================================================
 # 3. BASELINE (Ref. 39): GAUSSIAN MIXTURE (FULL COVARIANCE) IN THE LOGIT SPACE OF THE BOX
 # =============================================================================
@@ -397,12 +459,107 @@ class GaussMixture(PosteriorFamily):
         return self._dep
 
 
+# =============================================================================
+# 4. VARIANT: GAUSSIAN COPULA + MIXTURES OF TRUNCATED GAUSSIANS
+# =============================================================================
+class GMixCopula(_GaussianCopulaFamily):
+    """Marginal d: sum_k w_kd N(mu_kd, sigma_kd^2) truncated to [0, 1] (unit space), every component with its own
+    normaliser and mu_kd inside [0, 1] (MODULES/variant_GaussCopula_GaussMixMarginals)."""
+    name = "GC-GMix"
+
+    def __init__(self, loc, scale, w, offdiag, diag, lbound):
+        super().__init__(lbound)
+        self.mu, self.sig = np.asarray(loc, np.float64), np.asarray(scale, np.float64)       # (N, K, D)
+        w = np.asarray(w, np.float64)
+        self.w = w / np.sum(w, axis=1, keepdims=True)
+        self.n, self.n_components, self.d = self.mu.shape
+        self.alpha, self.beta = -self.mu / self.sig, (1.0 - self.mu) / self.sig
+        self.Pa, self.Qb = ndtr(self.alpha), ndtr(-self.beta)                                # mass below / above
+        self.Z = 1.0 - self.Pa - self.Qb
+        self.label = f"Gaussian copula + truncated-Gaussian mixture marginals (K = {self.n_components})"
+        self.short = f"Gaussian-mixture-marginal copula VAE ($K={self.n_components}$)"
+        self._set_copula(offdiag, diag)
+
+    @staticmethod
+    def _phi(x):
+        return np.exp(-0.5 * x ** 2 - 0.5 * LOG_2PI)
+
+    def _mix_cdf(self, x, mu, sig, w, Pa, Z, axis):
+        return np.clip(np.sum(w * (ndtr((x - mu) / sig) - Pa) / Z, axis=axis), 0.0, 1.0)
+
+    def _mix_pdf(self, x, mu, sig, w, Z, axis):
+        return np.sum(w * self._phi((x - mu) / sig) / (sig * Z), axis=axis)
+
+    def cdf(self, u):
+        return self._mix_cdf(u[:, None, :], self.mu, self.sig, self.w, self.Pa, self.Z, 1)
+
+    def pdf(self, u):
+        return self._mix_pdf(u[:, None, :], self.mu, self.sig, self.w, self.Z, 1)
+
+    def _grid(self, sl):
+        return (v[sl].transpose(0, 2, 1)[:, :, None, :] for v in (self.mu, self.sig, self.w, self.Pa, self.Z))   # (n, D, 1, K)
+
+    def cdf_grid(self, sl, x):
+        mu, sig, w, Pa, Z = self._grid(sl)
+        return self._mix_cdf(x[None, None, :, None], mu, sig, w, Pa, Z, -1)
+
+    def pdf_grid(self, sl, x):
+        mu, sig, w, _, Z = self._grid(sl)
+        return self._mix_pdf(x[None, None, :, None], mu, sig, w, Z, -1)
+
+    def moments(self):
+        pa, pb = self._phi(self.alpha), self._phi(self.beta)
+        r = (pa - pb) / self.Z
+        var = self.sig ** 2 * (1.0 + (self.alpha * pa - self.beta * pb) / self.Z - r ** 2)
+        mean = self.mu + self.sig * r
+        m1 = np.sum(self.w * mean, axis=1)
+        m2 = np.sum(self.w * (var + mean ** 2), axis=1)
+        return m1, np.sqrt(np.maximum(m2 - m1 ** 2, 1e-12))
+
+    def _samples_params(self, idx):
+        return (v[idx][:, None] for v in (self.mu, self.sig, self.w, self.Pa, self.Z))       # (n, 1, K, D)
+
+    def marginal_cdf_samples(self, u, idx):
+        mu, sig, w, Pa, Z = self._samples_params(idx)
+        return self._mix_cdf(u[:, :, None, :], mu, sig, w, Pa, Z, 2)
+
+    def marginal_pdf_samples(self, u, idx):
+        mu, sig, w, _, Z = self._samples_params(idx)
+        return self._mix_pdf(u[:, :, None, :], mu, sig, w, Z, 2)
+
+    def marginal_ppf(self, v, idx, n_iter=50):
+        lo, hi = np.zeros_like(v), np.ones_like(v)
+        for _ in range(n_iter):
+            mid = 0.5 * (lo + hi)
+            less = self.marginal_cdf_samples(mid, idx) < v
+            lo, hi = np.where(less, mid, lo), np.where(less, hi, mid)
+        return 0.5 * (lo + hi)
+
+    def sample_marginals(self, n, seed=0):
+        """Component of every sample, then the closed-form quantile of that truncated Gaussian."""
+        rng = np.random.default_rng(seed)
+        N, K, D = self.mu.shape
+        cw = np.cumsum(self.w.transpose(0, 2, 1), axis=-1)                                  # (N, D, K)
+        k = np.minimum(np.sum(cw[:, :, None, :] < rng.random((N, D, n, 1)), axis=-1), K - 1)
+        mu, sig, Pa, Qb, Z = (np.take_along_axis(v.transpose(0, 2, 1), k, axis=-1)
+                              for v in (self.mu, self.sig, self.Pa, self.Qb, self.Z))
+        v = rng.uniform(1e-6, 1 - 1e-6, size=mu.shape)
+        p_low, p_up = Pa + v * Z, Qb + (1.0 - v) * Z
+        xi = np.where(p_low < 0.5, ndtri(np.minimum(p_low, 0.5)), -ndtri(np.minimum(p_up, 0.5)))
+        return self.to_z(np.clip(mu + sig * xi, 0.0, 1.0).transpose(0, 2, 1))
+
+
 def family_from_preds(preds, lbound):
     """Posterior family of a Test_predicted_props*.npy / Val_predicted_props.npy dictionary."""
     p = preds
     if "test_a" in p:
         return KSCopula(p["test_a"], p["test_b"], p["test_weight_vals"], p["test_offdiag_elems"],
                         p["test_diag_elems"], lbound)
+    if "test_mix_loc" in p:
+        return GMixCopula(p["test_mix_loc"], p["test_mix_scale"], p["test_weight_vals"], p["test_offdiag_elems"],
+                          p["test_diag_elems"], lbound)
+    if "test_logz_loc" in p:
+        return LogNCopula(p["test_logz_loc"], p["test_logz_scale"], p["test_offdiag_elems"], p["test_diag_elems"], lbound)
     if "test_loc" in p:
         return TNCopula(p["test_loc"], p["test_scale"], p["test_offdiag_elems"], p["test_diag_elems"], lbound)
     if "test_means" in p:

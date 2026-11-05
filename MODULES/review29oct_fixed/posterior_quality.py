@@ -58,22 +58,35 @@ def psis_khat(log_w):
     return float(_gpd_k(np.sort(exceed)))
 
 
-def evaluate_split(fam, obs, pcfg, obs_types, gamma2, n_samples=500, seed=0, chunk=40):
-    """Per-observation -ELBO, IW-ELBO, KL lower bound and Pareto-k (DataFrame). obs = (f [Hz], v, r, ...)."""
-    bm = BridgeModel(pcfg)
-    lik = pcfg["likelihood"]
+def _log_weights(fam, obs, bridge, lik, obs_types, gamma2, n_samples, seed, chunk):
+    """Yields (idx, log_w, nll, log_q) for every chunk of observations; arrays (n, S) of S samples of q in unit space."""
     f, v, r = obs[:3]
     rng = np.random.default_rng(seed)
-    rows = []
     for i0 in range(0, fam.n, chunk):
         idx = np.arange(i0, min(i0 + chunk, fam.n))
         u = fam.sample_unit(n_samples, rng, idx)                                    # (n, S, D)
         log_q = fam.log_density_unit(u, idx)                                        # unit space: prior density 1
-        fp, vp, rp = bm.solve(fam.to_z(u).reshape(-1, fam.d))
+        fp, vp, rp = bridge.solve(fam.to_z(u).reshape(-1, fam.d))
         shape = (len(idx), n_samples)
         fp, vp, rp = fp.reshape(shape + fp.shape[1:]), vp.reshape(shape + vp.shape[1:]), rp.reshape(shape + rp.shape[1:])
         nll, _ = neg_log_likelihood(f[idx][:, None], v[idx][:, None], r[idx][:, None], fp, vp, rp, lik, obs_types)
-        log_w = -nll / gamma2 - log_q
+        yield idx, -nll / gamma2 - log_q, nll, log_q
+
+
+def mean_neg_elbo(fam, obs, bridge, obs_types, gamma2, n_samples=20, seed=0, chunk=200):
+    """Mean -ELBO of a split with the estimator of evaluate_split (log w, float64), without its diagnostics: the monitor
+    of the train-to-convergence protocol. The fixed seed repeats the random numbers, so two evaluations during a
+    training differ by the change of q and not by Monte Carlo noise."""
+    total = sum(-np.sum(np.mean(log_w, axis=1)) for _, log_w, _, _ in
+                _log_weights(fam, obs, bridge, bridge.lik, obs_types, gamma2, n_samples, seed, chunk))
+    return total / fam.n
+
+
+def evaluate_split(fam, obs, pcfg, obs_types, gamma2, n_samples=500, seed=0, chunk=40):
+    """Per-observation -ELBO, IW-ELBO, KL lower bound and Pareto-k (DataFrame). obs = (f [Hz], v, r, ...)."""
+    rows = []
+    for idx, log_w, nll, log_q in _log_weights(fam, obs, BridgeModel(pcfg), pcfg["likelihood"], obs_types, gamma2,
+                                               n_samples, seed, chunk):
         elbo = log_w.mean(axis=1)
         iw = logsumexp(log_w, axis=1) - np.log(n_samples)
         for j, i in enumerate(idx):

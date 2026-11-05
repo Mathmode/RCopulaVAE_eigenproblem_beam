@@ -11,6 +11,46 @@ or `Output/review29oct` was modified. The model is still **your** model:
 
 The fixes concern the loss, the "ground truth", the plots and the data.
 
+## 0l. Update (5 Nov, later): variant with truncated-Gaussian mixture marginals
+
+`MODULES/variant_GaussCopula_GaussMixMarginals` (GC-GMix; `posterior_families.GMixCopula`): the proposed model with truncated
+Gaussians in the place of the Kumaraswamy components, same quantile by bisection with implicit gradients. See its README. The
+files changed by this are saved in `MODULES/_backup_05Nov_before_GCGMix/`.
+
+## 0k. Update (5 Nov): train-to-convergence protocol and frequency-only runs
+
+`--schedule plateau` in `main_train_KSVAE.py` and in the baselines (`training_common.py`,
+`GC_KSmix_models.ConvergenceController`): the same convergence rule for every posterior family, with a low-noise monitor,
+wall-clock per epoch in the history, and the learning rate halved on a plateau. The default (`--schedule cosine`) is what all the
+runs so far used and does not change. Launcher, commands and reasons: `MODULES/model_comparison/README.md`
+(`run_convergence_gpu.sh --family ks|gctn|gmm --obs fv|f`). The code before this change is in
+`MODULES/_backup_review29oct_fixed_05Nov_before_convergence_protocol/`.
+
+## 0j. Update (4 Nov): coverage of the exact posterior on the prior scenarios
+
+`prior_scenarios_coverage.py`. The bearings of the 5-mode runs under-cover even on the 120 test structures drawn from
+the prior (equal-tailed 95 % coverage 0.900, K = 3, test A), and the exact posteriors of the benchmarks also miss
+bearings more often than deck zones (`Latex_docs/Results_analysis.tex`, Sec. 4.3). On prior draws the exact posterior
+must cover at 95 % unless the likelihood is misspecified, so the script computes the exact (SMC) posteriors of those
+120 structures (cached in `reference_posteriors/`, about 9 s each) and compares exact and VAE posteriors: coverage at
+the 19 MACE levels with bootstrap standard errors over structures, PIT tails, agreement of the two posteriors, and the
+data terms of the likelihood at z* for the structures whose bearings the exact posterior misses. About 3 min with 8
+workers per test set.
+```
+python MODULES/review29oct_fixed/prior_scenarios_coverage.py --workers 8                     # test set A
+python MODULES/review29oct_fixed/prior_scenarios_coverage.py --split test_fine --workers 8   # test set B
+```
+Results: `Output/review29oct_fixed/prior_scenarios_coverage_5modes/<test set>/` (README.txt lists the files). Default
+run: the K = 3 run (with or without `5modes` in its name); `--runs` compares several runs (e.g. K = 1, 3, 5).
+
+**Result (K = 1, 3, 5 runs, 4 Nov).** Test A: the exact posterior covers the deck zones at 0.957 +- 0.008 but the
+bearings at 0.904 +- 0.021 (U-shaped PIT: too narrow); the VAE matches it (bearings 0.900, exact - VAE 0.004 +- 0.007).
+So the bearing under-coverage comes from the likelihood. `shape_error_structure.py` (seconds) shows why: the shape term
+assumes isotropic errors across sensors, but in modes 4-5 the as-built (mass-field) error is concentrated in one
+direction (largest eigenvalue 42-44 % of the variance vs 26 % for noise), close to the bearings' shape signature, along
+which the misfit variance is 1.6-1.7 x sig_v^2. Candidate fix (not tested): a full covariance of the shape residual per
+mode. Test B: exact 0.905 (deck) / 0.842 (bearings), VAE the same within 0.02.
+
 ## 0i. FINAL case study and data set (3 Nov 2026) — the only data set in `Data/`
 
 - **Structure**: one girder line of a short-span steel-concrete composite bridge (HEB 600 + 2.0 m x 0.22 m C30/37 slab,
@@ -382,6 +422,7 @@ except as the green dash-dot curve in the 1-D strips.
 | `fe_model.py` | NumPy float64 FE model (identical matrices, verified against your solver), batched modal solver, noise model, and **the likelihood**. |
 | `dataset_generation.py` | Balanced stratified DoE (see below); purely physical observations; signs aligned to the healthy shapes; **likelihood calibration**. Writes `problem_config.json`, which training, the reference sampler and the plots all read. Also writes data figures. |
 | `reference_posterior.py` | Reference posterior by **adaptive-tempering SMC**. Starts from the uniform prior, never uses z*, uses the same likelihood and γ as training, keeps every sample. 4000 particles, about 20 s per case; cached. |
+| `prior_scenarios_coverage.py` | Coverage of the exact (SMC) and VAE posteriors on the test structures drawn from the prior, per parameter; tells whether an under-coverage comes from the likelihood or from the VAE. |
 | `preprocessing_and_eigen.py` | Your data loader and eigensolver layer, without the sign flip. |
 | `GC_KSmix_functions.py` | Copula sampling; stable KS-mixture CDF and log-pdf; quantile by bisection with **exact implicit gradients** (no clipping); copula entropy ½ log det R. |
 | `GC_KSmix_architectures.py` | Your encoder. `a, b = 1 + exp(7 tanh(raw/7))` (smooth, range up to about 1100); the copula head starts at R = I. |

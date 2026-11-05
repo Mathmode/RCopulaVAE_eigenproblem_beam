@@ -72,12 +72,12 @@ def tn_entropy(mu, sigma):
             + (alpha * std_normal_pdf(alpha) - beta * std_normal_pdf(beta)) / (2.0 * Z))
 
 
-def Fully_connected_enc_GCTN(input_dim, n_dims):
-    """Same trunk as Fully_connected_enc_GC_KS; heads: location, scale, copula factor."""
+def Fully_connected_enc_GCTN(input_dim, n_dims, hidden=(128, 256, 128)):
+    """Same trunk as Fully_connected_enc_GC_KS (default hidden); heads: location, scale, copula factor."""
     input1 = K.Input(shape=(input_dim,), name="InputLayer")
-    x = K.layers.Dense(128, activation="relu", kernel_initializer="he_uniform")(input1)
-    x = K.layers.Dense(256, activation="relu", kernel_initializer="he_uniform")(x)
-    x = K.layers.Dense(128, activation="relu", kernel_initializer="he_uniform")(x)
+    x = input1
+    for units in hidden:
+        x = K.layers.Dense(int(units), activation="relu", kernel_initializer="he_uniform")(x)
 
     loc_raw = K.layers.Dense(n_dims, activation="linear", name="loc")(x)
     # bias 1.5: sigma ~ 0.3 at the start (broad marginals, like the KS model at initialisation)
@@ -94,11 +94,11 @@ def Fully_connected_enc_GCTN(input_dim, n_dims):
 class Inverse_Copula_TN_Model(K.Model):
     """Encoder: modal data -> location and scale (B, D) of the truncated Gaussians (unit space) and copula factor."""
 
-    def __init__(self, input_dim_encoder, n_dims, obs_types="fv", **kwargs):
+    def __init__(self, input_dim_encoder, n_dims, obs_types="fv", hidden=(128, 256, 128), **kwargs):
         super(Inverse_Copula_TN_Model, self).__init__(**kwargs)
         self.n_dims = int(n_dims)
         self.obs_types = obs_types
-        self.FC_encoder = Fully_connected_enc_GCTN(input_dim_encoder, n_dims)
+        self.FC_encoder = Fully_connected_enc_GCTN(input_dim_encoder, n_dims, hidden)
 
     def call(self, inputs):
         [freq_data, rot_modes_data, vert_modes_data, _] = inputs
@@ -122,9 +122,10 @@ class GaussCopulaTNVAE(My_CopulaKSVAE_withEigen):
     """Gaussian copula + truncated-Gaussian marginals; likelihood, decoder and training steps inherited."""
     HEAD_ORDER = ["loc", "scale", "off_diag", "diag"]
     PRED_KEYS = ["test_loc", "test_scale", "test_offdiag_elems", "test_diag_elems"]
+    HIDDEN = (128, 256, 128)        # hidden layers of the encoder; the entry script can change it (--hidden)
 
     def make_encoder(self, input_dim, n_dims, n_components, obs_types):
-        return Inverse_Copula_TN_Model(input_dim, n_dims, obs_types)
+        return Inverse_Copula_TN_Model(input_dim, n_dims, obs_types, self.HIDDEN)
 
     def sample_posterior(self, inputs):
         loc, scale, offdiag, diag = self.Encoder_model(inputs)

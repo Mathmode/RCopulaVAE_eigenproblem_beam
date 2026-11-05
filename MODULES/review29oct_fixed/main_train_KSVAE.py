@@ -31,6 +31,9 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from MODULES.review29oct_fixed import config as C
+from MODULES.review29oct_fixed.training_common import (
+    KS_PRED_KEYS, add_protocol_arguments, make_optimizer, make_training_callbacks, make_validation_monitor, schedule_tag,
+)
 
 parser = argparse.ArgumentParser(description="Train the PI-GC-KSmix-VAE (fixed ELBO).")
 parser.add_argument("--gpu", type=str, default=None, help="CUDA_VISIBLE_DEVICES (default: leave unchanged)")
@@ -50,6 +53,7 @@ parser.add_argument("--obs", type=str, default=None, help="observed quantities, 
 parser.add_argument("--seed", type=int, default=1234)
 parser.add_argument("--run-name", type=str, default=None)
 parser.add_argument("--postprocess", action="store_true", help="run postprocessing.py at the end")
+add_protocol_arguments(parser)
 args, _ = parser.parse_known_args()
 
 if args.gpu is not None:
@@ -76,9 +80,7 @@ print(f"Devices: {[tf.config.experimental.get_device_details(g).get('device_name
 from MODULES.review29oct_fixed.preprocessing_and_eigen import (
     load_bridge_data, load_baseline_matrices, load_problem_config, load_test_split,
 )
-from MODULES.review29oct_fixed.GC_KSmix_models import (
-    My_CopulaKSVAE_withEigen, LikelihoodTempering, LearningRateLogger, FastInMemoryBestWeights,
-)
+from MODULES.review29oct_fixed.GC_KSmix_models import My_CopulaKSVAE_withEigen
 
 
 def main():
@@ -117,7 +119,7 @@ def main():
     if not re.search(r"\d+modes$", data_tag):   # the run name always states the number of modes
         data_tag = f"{data_tag}{f_train.shape[1]}modes"
     run_name = args.run_name or (f"KSVAE_fixed_{data_tag + '_' if data_tag else ''}{n_dims}D_{args.num_ks}KS_"
-                                 f"obs-{obs_types}_Gamma{args.gamma}_Ep{args.epochs}")
+                                 f"obs-{obs_types}_Gamma{args.gamma}_{schedule_tag(args)}")
     folder_path = os.path.join(C.OUTPUT_DIR, run_name)
     os.makedirs(folder_path, exist_ok=True)
 
@@ -129,8 +131,7 @@ def main():
         likelihood=lik, obs_types=obs_types, sensor_nodes=pcfg.get("sensor_nodes"),
     )
     steps_per_epoch = int(np.ceil(len(f_train) / args.batch))
-    lr_schedule = K.optimizers.schedules.CosineDecay(args.lr, decay_steps=args.epochs * steps_per_epoch, alpha=0.02)
-    model.compile(optimizer=K.optimizers.Adam(learning_rate=lr_schedule, global_clipnorm=10.0))
+    model.compile(optimizer=make_optimizer(args, K, steps_per_epoch))
     _ = model((f_train[:2], r_train[:2], v_train[:2], a_train[:2]))
 
     run_cfg = {k: v for k, v in vars(args).items()}
@@ -141,15 +142,16 @@ def main():
 
     # --- 3. TRAINING ---
     print(f"Training PI-GC-KSmix-VAE: {n_dims}D, K={args.num_ks}, S={args.samples}, gamma={args.gamma}, "
-          f"obs={obs_types}, {args.epochs} epochs (warm-up {args.warmup}) -> {folder_path}")
-    best_cb = FastInMemoryBestWeights(monitor="val_neg_elbo", patience=args.patience, start_epoch=args.warmup)
-    csv_cb = K.callbacks.CSVLogger(os.path.join(folder_path, "model_history.csv"))
+          f"obs={obs_types}, {args.schedule} schedule, {args.epochs} epochs (warm-up {args.warmup}) -> {folder_path}")
+    monitor = None
+    if args.schedule == "plateau":
+        monitor = make_validation_monitor(model, (f_val, r_val, v_val, a_val), KS_PRED_KEYS, pcfg, data_dir, obs_types,
+                                          args.gamma ** 2, args.monitor_samples)
+    best_cb, callbacks = make_training_callbacks(args, K, folder_path, monitor)
     start_time = time.time()
-    history = model.fit(
-        train_ds, epochs=args.epochs, validation_data=val_ds, verbose=2,
-        callbacks=[LikelihoodTempering(args.tau0, args.warmup), LearningRateLogger(), best_cb, csv_cb],
-    )
-    training_time = time.time() - start_time
+    history = model.fit(train_ds, epochs=args.epochs, validation_data=val_ds, verbose=2, callbacks=callbacks)
+    monitor_time = getattr(best_cb, "monitor_time", 0.0)
+    training_time = time.time() - start_time - monitor_time
     n_run = len(history.history["loss"])
     print(f"Total training time: {training_time:.1f} s ({training_time / n_run:.2f} s/epoch)")
 
@@ -182,7 +184,8 @@ def main():
         "n_samples": args.samples, "epochs": args.epochs, "epochs_run": n_run, "warmup": args.warmup,
         "best_epoch": best_cb.best_epoch, "gamma": args.gamma, "std_f": std_f, "mean_f": mean_f, "lbound": lbound,
         "training_time_sec": training_time, "data_dir": data_dir, "obs_types": obs_types, "likelihood": lik,
-        "test_sets": list(test_sets),
+        "test_sets": list(test_sets), "schedule": args.schedule, "monitor_time_sec": monitor_time,
+        "converged": getattr(best_cb, "converged", None),
     }
     np.save(os.path.join(folder_path, "Problem_info.npy"), Problem_info, allow_pickle=True)
     print(f"Saved weights, history, test posterior parameters and problem info to {folder_path}")

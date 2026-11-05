@@ -25,6 +25,74 @@ import time
 from MODULES.review29oct_fixed import config as C
 
 
+def add_protocol_arguments(parser):
+    """Options of the learning-rate protocol. Default: the fixed cosine schedule with early stopping on the validation
+    -ELBO. --schedule plateau: train to convergence (GC_KSmix_models.ConvergenceController, the same rule for every
+    family); --epochs is then only a cap and --patience is not used."""
+    parser.add_argument("--schedule", choices=["cosine", "plateau"], default="cosine",
+                        help="cosine: fixed budget of --epochs; plateau: train to convergence")
+    parser.add_argument("--lr-patience", type=int, default=200,
+                        help="plateau: epochs without improvement before halving the learning rate (or, at --lr-min, stopping)")
+    parser.add_argument("--lr-min", type=float, default=1e-5, help="plateau: lowest learning rate (end of the cosine schedule)")
+    parser.add_argument("--min-delta", type=float, default=0.002, help="plateau: smallest improvement that counts [nats]")
+    parser.add_argument("--monitor-every", type=int, default=20, help="plateau: epochs between evaluations of the monitor")
+    parser.add_argument("--monitor-samples", type=int, default=20,
+                        help="plateau: samples of q per validation observation in the monitor")
+    return parser
+
+
+def schedule_tag(args):
+    """Last token of the default run names: Ep<epochs> (fixed schedule) or Conv<cap> (train to convergence)."""
+    return f"{'Conv' if args.schedule == 'plateau' else 'Ep'}{args.epochs}"
+
+
+def make_optimizer(args, K, steps_per_epoch):
+    """Adam with the cosine schedule of --epochs, or with a learning rate that ConvergenceController can change."""
+    lr = args.lr
+    if args.schedule == "cosine":
+        lr = K.optimizers.schedules.CosineDecay(args.lr, decay_steps=args.epochs * steps_per_epoch, alpha=0.02)
+    return K.optimizers.Adam(learning_rate=lr, global_clipnorm=10.0)
+
+
+def make_validation_monitor(model, val_inputs, pred_keys, pcfg, data_dir, obs_types, gamma2, n_samples, seed=0):
+    """
+    Returns f() -> mean validation -ELBO of the current weights (unit space, as evaluate_posterior_quality.py), for any
+    family: the numpy estimator of posterior_quality.py on the encoder outputs, with the same random numbers at every
+    evaluation. The -ELBO logged by model.fit is too noisy to select weights: with an analytic entropy (GC-TN) its Monte
+    Carlo error at fixed weights is about 0.018 nats, and a lucky dip can stop the training early.
+    """
+    import numpy as np
+    import tensorflow as tf
+    from MODULES.review29oct_fixed.fe_model import BridgeModel
+    from MODULES.review29oct_fixed.posterior_families import family_from_preds
+    from MODULES.review29oct_fixed.posterior_quality import mean_neg_elbo
+
+    inputs = tuple(tf.convert_to_tensor(x) for x in val_inputs)
+    obs = tuple(np.load(os.path.join(data_dir, f"{k}_val.npy")).astype(np.float64)
+                for k in ("freqs", "vertmodes", "rotmodes"))
+    bridge, lbound = BridgeModel(pcfg), float(pcfg["lbound"])
+
+    def monitor():
+        outs = [o.numpy() for o in model.Encoder_model(inputs)]
+        return mean_neg_elbo(family_from_preds(dict(zip(pred_keys, outs)), lbound), obs, bridge, obs_types, gamma2,
+                             n_samples, seed)
+    return monitor
+
+
+def make_training_callbacks(args, K, folder_path, monitor=None):
+    """Returns the callback that keeps the best weights and the callback list of model.fit."""
+    from MODULES.review29oct_fixed.GC_KSmix_models import (
+        LikelihoodTempering, LearningRateLogger, FastInMemoryBestWeights, EpochTimer, ConvergenceController,
+    )
+    if args.schedule == "plateau":
+        best_cb = ConvergenceController(monitor, args.warmup, args.monitor_every, args.lr_patience, args.lr_min,
+                                        args.min_delta)
+    else:
+        best_cb = FastInMemoryBestWeights(monitor="val_neg_elbo", patience=args.patience, start_epoch=args.warmup)
+    csv_cb = K.callbacks.CSVLogger(os.path.join(folder_path, "model_history.csv"))
+    return best_cb, [LikelihoodTempering(args.tau0, args.warmup), LearningRateLogger(), EpochTimer(), best_cb, csv_cb]
+
+
 def add_training_arguments(parser, default_samples=6):
     """The arguments (and defaults) of main_train_KSVAE.py, except --num-ks."""
     parser.add_argument("--gpu", type=str, default=None, help="GPU index as in nvidia-smi (default: leave unchanged)")
@@ -43,7 +111,7 @@ def add_training_arguments(parser, default_samples=6):
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--postprocess", action="store_true", help="run postprocessing.py at the end")
-    return parser
+    return add_protocol_arguments(parser)
 
 
 def select_gpu(gpu):
@@ -74,9 +142,6 @@ def train_and_save(args, model_cls, family, n_components, output_dir, run_prefix
 
     from MODULES.review29oct_fixed.preprocessing_and_eigen import (
         load_bridge_data, load_baseline_matrices, load_problem_config, load_test_split,
-    )
-    from MODULES.review29oct_fixed.GC_KSmix_models import (
-        LikelihoodTempering, LearningRateLogger, FastInMemoryBestWeights,
     )
 
     K.utils.set_random_seed(args.seed)
@@ -112,7 +177,7 @@ def train_and_save(args, model_cls, family, n_components, output_dir, run_prefix
     if not re.search(r"\d+modes$", data_tag):   # the run name always states the number of modes
         data_tag = f"{data_tag}{f_train.shape[1]}modes"
     run_name = args.run_name or (f"{run_prefix}_{data_tag + '_' if data_tag else ''}{n_dims}D_"
-                                 f"obs-{obs_types}_Gamma{args.gamma}_Ep{args.epochs}")
+                                 f"obs-{obs_types}_Gamma{args.gamma}_{schedule_tag(args)}")
     folder_path = os.path.join(output_dir, run_name)
     os.makedirs(folder_path, exist_ok=True)
 
@@ -124,8 +189,7 @@ def train_and_save(args, model_cls, family, n_components, output_dir, run_prefix
         likelihood=lik, obs_types=obs_types, sensor_nodes=pcfg.get("sensor_nodes"),
     )
     steps_per_epoch = int(np.ceil(len(f_train) / args.batch))
-    lr_schedule = K.optimizers.schedules.CosineDecay(args.lr, decay_steps=args.epochs * steps_per_epoch, alpha=0.02)
-    model.compile(optimizer=K.optimizers.Adam(learning_rate=lr_schedule, global_clipnorm=10.0))
+    model.compile(optimizer=make_optimizer(args, K, steps_per_epoch))
     _ = model((f_train[:2], r_train[:2], v_train[:2], a_train[:2]))
     n_params = int(sum(np.prod(w.shape) for w in model.trainable_weights))
 
@@ -139,16 +203,17 @@ def train_and_save(args, model_cls, family, n_components, output_dir, run_prefix
 
     # --- 3. TRAINING ---
     print(f"Training {family}: {n_dims}D, components={n_components}, S={args.samples}, gamma={args.gamma}, "
-          f"obs={obs_types}, {n_params} trainable parameters, {args.epochs} epochs (warm-up {args.warmup}) -> "
-          f"{folder_path}")
-    best_cb = FastInMemoryBestWeights(monitor="val_neg_elbo", patience=args.patience, start_epoch=args.warmup)
-    csv_cb = K.callbacks.CSVLogger(os.path.join(folder_path, "model_history.csv"))
+          f"obs={obs_types}, {n_params} trainable parameters, {args.schedule} schedule, {args.epochs} epochs "
+          f"(warm-up {args.warmup}) -> {folder_path}")
+    monitor = None
+    if args.schedule == "plateau":
+        monitor = make_validation_monitor(model, (f_val, r_val, v_val, a_val), pred_keys, pcfg, data_dir, obs_types,
+                                          args.gamma ** 2, args.monitor_samples)
+    best_cb, callbacks = make_training_callbacks(args, K, folder_path, monitor)
     start_time = time.time()
-    history = model.fit(
-        train_ds, epochs=args.epochs, validation_data=val_ds, verbose=2,
-        callbacks=[LikelihoodTempering(args.tau0, args.warmup), LearningRateLogger(), best_cb, csv_cb],
-    )
-    training_time = time.time() - start_time
+    history = model.fit(train_ds, epochs=args.epochs, validation_data=val_ds, verbose=2, callbacks=callbacks)
+    monitor_time = getattr(best_cb, "monitor_time", 0.0)
+    training_time = time.time() - start_time - monitor_time
     n_run = len(history.history["loss"])
     print(f"Total training time: {training_time:.1f} s ({training_time / n_run:.2f} s/epoch)")
 
@@ -173,7 +238,8 @@ def train_and_save(args, model_cls, family, n_components, output_dir, run_prefix
         "n_samples": args.samples, "epochs": args.epochs, "epochs_run": n_run, "warmup": args.warmup,
         "best_epoch": best_cb.best_epoch, "gamma": args.gamma, "std_f": std_f, "mean_f": mean_f, "lbound": lbound,
         "training_time_sec": training_time, "data_dir": data_dir, "obs_types": obs_types, "likelihood": lik,
-        "test_sets": [s for s in splits if s != "val"], "seed": args.seed, **(extra_info or {}),
+        "test_sets": [s for s in splits if s != "val"], "seed": args.seed, "schedule": args.schedule,
+        "monitor_time_sec": monitor_time, "converged": getattr(best_cb, "converged", None), **(extra_info or {}),
     }
     np.save(os.path.join(folder_path, "Problem_info.npy"), Problem_info, allow_pickle=True)
     print(f"Saved weights, history, posterior parameters (test sets + validation) and problem info to {folder_path}")
@@ -203,6 +269,14 @@ def load_trained_model(run_folder, info):
         cls, keys = My_CopulaKSVAE_withEigen, KS_PRED_KEYS
     elif family == "GC-TN":
         from MODULES.baseline_GaussCopula_GaussMarginals.GCTN_model import GaussCopulaTNVAE as cls
+        cls.HIDDEN = tuple(info.get("hidden", cls.HIDDEN))
+        keys = cls.PRED_KEYS
+    elif family == "GC-LogN":
+        from MODULES.baseline_GaussCopula_GaussMarginals.GCLogN_model import GaussCopulaLogNVAE as cls
+        cls.HIDDEN = tuple(info.get("hidden", cls.HIDDEN))
+        keys = cls.PRED_KEYS
+    elif family == "GC-GMix":
+        from MODULES.variant_GaussCopula_GaussMixMarginals.GCGMix_model import GaussCopulaGMixVAE as cls
         keys = cls.PRED_KEYS
     elif family == "GMM":
         from MODULES.baseline_GaussMixture_K5.GMM_model import GaussMixtureVAE, GaussMixtureDiagVAE

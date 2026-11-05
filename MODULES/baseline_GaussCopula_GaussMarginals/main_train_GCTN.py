@@ -32,6 +32,7 @@ OUTPUT_DIR = os.path.join(C.PROJECT_ROOT, "Output", "baseline_GaussCopula_GaussM
 
 parser = add_training_arguments(argparse.ArgumentParser(
     description="Baseline 1: Gaussian copula + truncated-Gaussian marginals (same ELBO and training as the KS model)."))
+parser.add_argument("--hidden", type=int, nargs="+", default=[128, 256, 128], help="hidden layers of the encoder")
 args, _ = parser.parse_known_args()
 select_gpu(args.gpu)   # before TensorFlow is imported
 
@@ -39,10 +40,11 @@ select_gpu(args.gpu)   # before TensorFlow is imported
 def main():
     from MODULES.review29oct_fixed.training_common import train_and_save
     from MODULES.baseline_GaussCopula_GaussMarginals.GCTN_model import GaussCopulaTNVAE
+    GaussCopulaTNVAE.HIDDEN = tuple(args.hidden)
     return train_and_save(args, GaussCopulaTNVAE, family="GC-TN", n_components=1, output_dir=OUTPUT_DIR,
                           run_prefix="GCTN", pred_keys=GaussCopulaTNVAE.PRED_KEYS,
                           extra_info={"variational_family": "Gaussian copula + truncated-Gaussian marginals "
-                                                            "(Ref. 41 / submitted version)"})
+                                                            "(Ref. 41 / submitted version)", "hidden": args.hidden})
 
 
 if __name__ == "__main__":

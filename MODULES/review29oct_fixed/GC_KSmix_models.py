@@ -28,6 +28,8 @@ What was wrong in MODULES/review29oct/GC_KSmix_models.py and why the posterior c
      0.92 every 1000 steps (x 1e-4 after 1900 epochs: training effectively stopped after ~500 epochs).
 """
 
+import time
+
 import numpy as np
 import tensorflow as tf
 
@@ -317,3 +319,70 @@ class FastInMemoryBestWeights(K.callbacks.Callback):
             for var, val in zip(self.model.weights, self.best_weights):
                 var.assign(val)
             print(f"Restored best weights from epoch {self.best_epoch} ({self.monitor}={self.best_val:.4f}).")
+
+
+class EpochTimer(K.callbacks.Callback):
+    """Logs the wall-clock time of every epoch (training steps + the standard validation pass) as epoch_time_s."""
+
+    def on_epoch_begin(self, epoch, logs=None):
+        self.t0 = time.time()
+
+    def on_epoch_end(self, epoch, logs=None):
+        if logs is not None:
+            logs["epoch_time_s"] = time.time() - self.t0
+
+
+class ConvergenceController(K.callbacks.Callback):
+    """
+    Train-to-convergence protocol, with the same rule for every posterior family. After the warm-up, every `every` epochs
+    `monitor()` estimates the validation -ELBO (low Monte Carlo error, see training_common.make_validation_monitor) and
+    the best weights are kept. The learning rate is halved after `lr_patience` epochs without an improvement larger than
+    `min_delta`; once at `lr_min`, the same condition stops the training (converged = True). The number of epochs of
+    model.fit is only a cap. The monitor is logged as monitor_neg_elbo (NaN in the other epochs) and its cost is kept
+    apart in monitor_time, because it is not part of the training cost.
+    """
+
+    def __init__(self, monitor, start_epoch=150, every=20, lr_patience=200, lr_min=1e-5, min_delta=0.002, factor=0.5):
+        super(ConvergenceController, self).__init__()
+        self.monitor = monitor
+        self.start_epoch, self.every, self.lr_patience = int(start_epoch), int(every), int(lr_patience)
+        self.lr_min, self.min_delta, self.factor = float(lr_min), float(min_delta), float(factor)
+        self.best_val, self.best_epoch, self.best_weights = np.inf, 0, None
+        self.ref_val, self.ref_epoch = np.inf, int(start_epoch)
+        self.monitor_time, self.converged = 0.0, False
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = {} if logs is None else logs
+        logs["monitor_neg_elbo"] = float("nan")
+        done = epoch + 1
+        if done <= self.start_epoch or (done - self.start_epoch) % self.every:
+            return
+        t0 = time.time()
+        value = float(self.monitor())
+        self.monitor_time += time.time() - t0
+        logs["monitor_neg_elbo"] = value
+        if value < self.best_val:
+            self.best_val, self.best_epoch = value, done
+            self.best_weights = [w.numpy() for w in self.model.weights]
+        if value < self.ref_val - self.min_delta:
+            self.ref_val, self.ref_epoch = value, done
+        elif done - self.ref_epoch >= self.lr_patience:
+            lr = float(np.asarray(self.model.optimizer.learning_rate))
+            if lr <= self.lr_min * 1.001:
+                print(f"\nConverged at epoch {done}: no improvement larger than {self.min_delta} in "
+                      f"{self.lr_patience} epochs at the lowest learning rate {lr:.3g}.")
+                self.converged = True
+                self.model.stop_training = True
+            else:
+                new_lr = max(self.factor * lr, self.lr_min)
+                self.model.optimizer.learning_rate = new_lr
+                self.ref_epoch = done
+                print(f"\nEpoch {done}: monitor {value:.4f}, best {self.best_val:.4f}; learning rate {lr:.3g} -> {new_lr:.3g}")
+
+    def on_train_end(self, logs=None):
+        if not self.converged:
+            print(f"Reached the cap of epochs before the convergence rule was met (best monitor at epoch {self.best_epoch}).")
+        if self.best_weights is not None:
+            for var, val in zip(self.model.weights, self.best_weights):
+                var.assign(val)
+            print(f"Restored best weights from epoch {self.best_epoch} (monitor {self.best_val:.4f}).")

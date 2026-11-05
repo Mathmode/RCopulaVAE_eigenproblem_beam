@@ -21,3 +21,24 @@ nohup bash MODULES/baseline_GaussCopula_GaussMarginals/run_GCTN_gpu.sh --gpu 2 -
 
 Results: `Output/baseline_GaussCopula_GaussMarginals/GCTN_03Nov-FINAL5modes_7D_obs-fv_Gamma1.0_Ep1500/` with the same layout
 as the proposed model (`TestA_same_FE_model_10el/`, `TestB_refined_FE_model_50el/`, `Posterior_quality/`).
+
+## Variant GC-LogN: one Gaussian in ln z
+
+`GCLogN_model.py`, `main_train_GCLogN.py`: the same encoder, copula, likelihood and training, with y = ln z ~ N(m, s^2) truncated to
+[ln 0.45, 0] (a truncated log-normal stiffness factor). Quantile and entropy remain closed-form (H[z] = H[y] + E[y]); no bisection.
+The location m may lie up to 3 s outside the support, so the density can keep rising up to a bound.
+
+Best member of each family on the 917 exact marginals of test set A (maximum likelihood, no encoder), W1 to the exact marginal: truncated
+Gaussian, mu inside the support 0.0032, mu free 0.0028; Gaussian in ln z 0.0012, which is at the noise of the 4000-particle reference
+(about 0.001). Joint E_p[log q] per scenario with the best copula: 0.049 nats above the truncated Gaussian. These numbers say what each
+family can represent, not what a trained encoder reaches.
+
+`--hidden "H ..."` (also for GC-TN) changes the hidden layers of the encoder; the default is the trunk of the other models.
+
+```bash
+nohup bash MODULES/model_comparison/run_convergence_gpu.sh --family gctn --obs fv --gpu 0 > conv_GCTN_fv.log 2>&1 &
+nohup bash MODULES/model_comparison/run_convergence_gpu.sh --family gclogn --obs fv --gpu 1 > conv_GCLogN_fv.log 2>&1 &
+nohup bash MODULES/model_comparison/run_convergence_gpu.sh --family gclogn --hidden "256 512 256" --obs fv --gpu 2 > conv_GCLogN_H256_fv.log 2>&1 &
+```
+
+Results: `Output/baseline_GaussCopula_GaussMarginals/GCLogN_03Nov-FINAL5modes_7D_obs-fv_Gamma1.0_Conv6000[_H256-512-256]/`.
