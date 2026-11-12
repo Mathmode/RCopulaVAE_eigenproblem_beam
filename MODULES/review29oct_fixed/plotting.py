@@ -8,7 +8,13 @@ Corner plots and 1-D marginals shared by reference_posterior.py and postprocessi
 Both the reference and the VAE posterior are drawn from plain, equally weighted samples with the
 same density estimator: a Gaussian kernel (Scott bandwidth) reflected at the bounds [lbound, 1],
 so mass piled up at z = 1 (healthy parameters) is not smeared outside the box. Overlay contours
-enclose 50 % (solid) and 90 % (dashed) of the probability mass.
+enclose 50 % and 90 % of the probability mass.
+
+corner_overlay, strip_1d and physical_profile are journal figures: they are created at their printed width
+(FIG_WIDTH = 7 in, ASCE), so the font sizes of PUB_RC are the printed ones, and they carry no titles or statistics
+(those belong in the caption and in the text). The same identity is used in all of them: reference posterior = dashed
+outline, with a grey fill for the marginals and a gold scale for the joint densities (only in the overlays, where it
+validates the VAE), VAE posterior = navy, true state = red.
 """
 
 import os
@@ -19,16 +25,30 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.cm as mcm
 import matplotlib.lines as mlines
 import matplotlib.colors as mcolors
+import matplotlib.patches as mpatches
 from scipy.stats import gaussian_kde
 from scipy.ndimage import gaussian_filter
 
-LABELS_7D = [r"$z_1$", r"$z_2$", r"$z_3$", r"$z_4$", r"$z_5$", r"$z_{b,L}$", r"$z_{b,R}$"]
-TITLES_7D = ["Zone $z_1$", "Zone $z_2$", "Zone $z_3$", "Zone $z_4$", "Zone $z_5$",
-             "Left bearing $z_{b,L}$", "Right bearing $z_{b,R}$"]
-RAW_NAMES = ["z_1 (D1)", "z_2 (D2)", "z_3 (D3)", "z_4 (D4)", "z_5 (D5)", "z_6 (BL)", "z_7 (BR)"]
+from MODULES.review29oct_fixed import config as _C
+LABELS_7D = list(_C.LABELS_7D)                     # 7 labels, or 12 with CVAE_ZONES=10 (config.py)
+TITLES_7D = [f"Zone {l}" for l in LABELS_7D[:_C.N_ZONES]] + ["Left bearing $z_{b,L}$", "Right bearing $z_{b,R}$"]
 RED, BLUE = "#D62728", "#1F77B4"
+
+# Journal figures: one identity for each quantity, readable in colour, in greyscale and with colour-blind vision (fill vs
+# line, dashed vs solid, star). The joint density is a single-hue gold scale, lightness falling monotonically from white,
+# stopped at a mid tone so that the navy lines and the white-edged star stay readable on its darkest colour.
+REF_FILL, REF_LINE, REF_DASH = "#CFCFCF", "#3F3F3F", (0, (3.2, 1.6))
+VAE_FILL, VAE_LINE = "#9DC3E6", "#08306B"
+TRUE_COLOR = "#C1121F"
+TRUE_EDGE = "white"
+REF_CMAP = mcolors.LinearSegmentedColormap.from_list("reference_density", ["#FFFFFF", "#FFF2B8", "#FDCF5F", "#F2A32C"])
+REF_LABEL = r"Reference posterior $p(\mathbf{z}\,|\,\mathbf{m})$"
+VAE_LABEL = r"VAE posterior $q_\phi(\mathbf{z}\,|\,\mathbf{m})$"
+TRUE_LABEL = r"True state $\mathbf{z}^*$"
+GROUP_COLORS = {"deck": "#0072B2", "bearings": "#E69F00"}   # deck zones / bearings (Okabe-Ito, colour-blind safe)
 
 
 logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
@@ -43,6 +63,19 @@ PAPER_RC = {
     "pdf.fonttype": 42, "ps.fonttype": 42,
 }
 
+# Figures drawn at their printed size: ASCE asks for lettering legible when the figure is 3.5 in or 7 in wide. These sizes
+# are therefore the printed ones (figures drawn at 19-23 in and reduced to 7 in print their 11-13 pt text at 4-5 pt).
+FIG_WIDTH = 7.0
+PUB_RC = {
+    **PAPER_RC,
+    "font.size": 9, "axes.labelsize": 10, "axes.titlesize": 9.5, "xtick.labelsize": 8, "ytick.labelsize": 8,
+    "legend.fontsize": 9.5, "legend.frameon": False, "legend.handlelength": 1.7, "legend.handletextpad": 0.5,
+    "legend.columnspacing": 1.4, "legend.labelspacing": 0.3, "legend.borderaxespad": 0.0, "legend.borderpad": 0.0,
+    "axes.linewidth": 0.6, "lines.linewidth": 1.2, "patch.linewidth": 0.7, "xtick.major.width": 0.6,
+    "ytick.major.width": 0.6, "xtick.major.size": 2.5, "ytick.major.size": 2.5, "xtick.major.pad": 2,
+    "ytick.major.pad": 2, "axes.labelpad": 2.5, "axes.titlepad": 3.5, "grid.linewidth": 0.4, "grid.color": "0.86",
+}
+
 
 def fixed_style(fn):
     """Draws with the journal style PAPER_RC, whatever style the console has set (e.g. seaborn in Spyder)."""
@@ -53,11 +86,29 @@ def fixed_style(fn):
     return wrapper
 
 
-def save_figure(fig, path, dpi=300):
-    """Saves `path` as PNG (dpi) and the same figure as vector PDF next to it (for the manuscript)."""
+def pub_style(fn):
+    """Draws with PUB_RC (figures created at their printed size), whatever style the console has set."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with plt.style.context(["default", PUB_RC]):
+            return fn(*args, **kwargs)
+    return wrapper
+
+
+def save_figure(fig, path, dpi=300, tight=True):
+    """
+    Saves `path` as PNG (dpi) and the same figure as vector PDF next to it (for the manuscript).
+    tight=False keeps the exact figure size (figures created at their printed width).
+    """
     stem = os.path.splitext(path)[0]
-    fig.savefig(stem + ".png", dpi=dpi, bbox_inches="tight")
-    fig.savefig(stem + ".pdf", bbox_inches="tight")
+    bbox = "tight" if tight else None
+    fig.savefig(stem + ".png", dpi=dpi, bbox_inches=bbox)
+    fig.savefig(stem + ".pdf", dpi=dpi, bbox_inches=bbox)
+
+
+def despine(ax, sides=("top", "right")):
+    for s in sides:
+        ax.spines[s].set_visible(False)
 
 
 # =============================================================================
@@ -91,10 +142,6 @@ def hpd_levels(Z, masses=(0.9, 0.5)):
     cum = np.cumsum(z) / (np.sum(z) + 1e-300)
     levels = [z[min(np.searchsorted(cum, m), len(z) - 1)] for m in masses]
     return sorted(set(levels))
-
-
-def summary_stats(samples):
-    return np.mean(samples, axis=0), np.std(samples, axis=0)
 
 
 # =============================================================================
@@ -152,169 +199,160 @@ def corner_single(samples, z_true, lb, title, cbar_label, save_path, cmap="virid
 
 
 # =============================================================================
-# OVERLAY CORNER: reference (red) vs VAE (blue)
+# OVERLAY CORNER: reference (shaded density + dashed contours) vs VAE (solid contours)
 # =============================================================================
-def _draw_hpd(ax, X, Y, Z, fill_colors, line_color, alpha):
-    """Filled 90 % / 50 % highest-density regions, plus the 99 % contour (dotted) that bounds the plausible region."""
-    lv = hpd_levels(Z)
-    if len(lv) == 2 and Z.max() > 0:
-        ax.contourf(X, Y, Z, levels=[lv[0], lv[1], Z.max() * 1.001], colors=fill_colors, alpha=alpha)
-        ax.contour(X, Y, Z, levels=lv, colors=[line_color, line_color], linestyles=["--", "-"], linewidths=[1.2, 1.8])
-        lv99 = hpd_levels(Z, masses=(0.99,))
-        if lv99[0] < lv[0]:
-            ax.contour(X, Y, Z, levels=lv99, colors=[line_color], linestyles=[":"], linewidths=[1.0])
+def _overlay_panel(ax, x_ref, x_vae, dc, dr, z_true, lb):
+    """Off-diagonal panel: relative density of the reference, 50 % and 90 % contours of both posteriors, true state."""
+    X, Y, Z = density_2d(x_ref[:, dc], x_ref[:, dr], lb)
+    ax.imshow(Z / (Z.max() + 1e-300), origin="lower", extent=[lb, 1.0, lb, 1.0], aspect="auto", cmap=REF_CMAP,
+              vmin=0.0, vmax=1.0, interpolation="bilinear")
+    ax.contour(X, Y, Z, levels=hpd_levels(Z), colors=[REF_LINE], linestyles=[REF_DASH], linewidths=0.7)
+    X, Y, Z = density_2d(x_vae[:, dc], x_vae[:, dr], lb)
+    ax.contour(X, Y, Z, levels=hpd_levels(Z), colors=[VAE_LINE], linewidths=1.0)
+    ax.plot(z_true[dc], z_true[dr], marker="*", color=TRUE_COLOR, ms=8, mec=TRUE_EDGE, mew=0.4, ls="none", zorder=10,
+            clip_on=False)
+    ax.set_ylim(lb, 1.0)
 
 
-@fixed_style
-def corner_overlay(x_gt, x_vae, z_true, dims, lb, title, save_path, legend_title, label_vae="Estimated KS-Copula VAE posterior"):
+@pub_style
+def corner_overlay(x_ref, x_vae, z_true, dims, lb, save_path, label_vae=VAE_LABEL):
+    """
+    Overlay of the two posteriors in the parameters `dims`, at print size (no separate reference figure is needed):
+    below the diagonal, the relative joint density of the reference (gold scale, colour bar) with the 50 % and 90 %
+    highest-density contours of both posteriors; on the diagonal, the two marginals (reference in grey).
+    """
     n = len(dims)
-    fig_sz = (19.5, 19.0) if n >= 7 else (3.1 * n + 3, 3.0 * n + 2.5)
-    fig, axes = plt.subplots(n, n, figsize=fig_sz, facecolor="white")
-    axes = np.atleast_2d(axes)
+    width = min(FIG_WIDTH, 1.3 * n + 0.6)
+    left, right, bottom, top, gap = 0.62, 0.13, 0.46, 0.25, 0.09     # margins [in], gap between panels [panel widths]
+    height = width - left - right + bottom + top                     # square panels
+    fig = plt.figure(figsize=(width, height))
+    gs = fig.add_gridspec(n, n, left=left / width, right=1.0 - right / width, bottom=bottom / height,
+                          top=1.0 - top / height, wspace=gap, hspace=gap)
     grid = np.linspace(lb, 1.0, 300)
-    m_gt, s_gt = summary_stats(x_gt)
-    m_q, s_q = summary_stats(x_vae)
     for r in range(n):
-        for c in range(n):
-            ax = axes[r, c]
+        for c in range(r + 1):
+            ax = fig.add_subplot(gs[r, c])
             dr, dc = dims[r], dims[c]
             if r == c:
-                k_gt = kde_1d(x_gt[:, dr], grid, lb)
-                k_q = kde_1d(x_vae[:, dr], grid, lb)
-                ax.set_facecolor("#F7F8FA")
-                ax.fill_between(grid, k_gt, color=RED, alpha=0.22)
-                ax.plot(grid, k_gt, color=RED, lw=2.2)
-                ax.fill_between(grid, k_q, color=BLUE, alpha=0.25)
-                ax.plot(grid, k_q, color=BLUE, lw=2.2)
-                ax.axvline(z_true[dr], color="#111111", ls="--", lw=1.9)
-                ax.set_title(f"{LABELS_7D[dr]} (T={z_true[dr]:.2f}|GT={m_gt[dr]:.2f}|Est={m_q[dr]:.2f})",
-                             fontsize=10.5 if n >= 7 else 12, fontweight="bold", pad=4)
-                ax.set_xlim(lb, 1.0)
-                ax.set_ylim(0, None)
+                k_ref, k_q = kde_1d(x_ref[:, dr], grid, lb), kde_1d(x_vae[:, dr], grid, lb)
+                ax.fill_between(grid, k_ref, color=REF_FILL, lw=0)
+                ax.plot(grid, k_ref, color=REF_LINE, ls=REF_DASH, lw=0.8)
+                ax.plot(grid, k_q, color=VAE_LINE, lw=1.2)
+                ax.axvline(z_true[dr], color=TRUE_COLOR, lw=0.9)
+                ax.set_ylim(0, 1.05 * max(k_ref.max(), k_q.max()))
                 ax.set_yticks([])
-            elif r > c:
-                X, Y, Z = density_2d(x_gt[:, dc], x_gt[:, dr], lb)
-                _draw_hpd(ax, X, Y, Z, ["#FADBD8", "#F1948A"], "#922B21", 0.6)
-                X, Y, Z = density_2d(x_vae[:, dc], x_vae[:, dr], lb)
-                _draw_hpd(ax, X, Y, Z, ["#D6EAF8", "#85C1E9"], "#1B4F72", 0.5)
-                ax.plot(z_true[dc], z_true[dr], marker="*", color="#FFD700", ms=13, mec="#111111", mew=1.1, zorder=15)
-                ax.set_xlim(lb, 1.0)
-                ax.set_ylim(lb, 1.0)
-                ax.grid(True, ls=":", alpha=0.35)
+                despine(ax, ("top", "left", "right"))
+                ax.set_title(LABELS_7D[dr], fontsize=10)
             else:
-                ax.axis("off")
-            if r >= c:
-                ax.tick_params(labelsize=11)
-                if c == 0 and r > 0:
-                    ax.set_ylabel(LABELS_7D[dr], fontsize=16, fontweight="bold")
-                else:
-                    ax.tick_params(labelleft=False)
-                if r == n - 1:
-                    ax.set_xlabel(LABELS_7D[dc], fontsize=16, fontweight="bold")
-                else:
-                    ax.tick_params(labelbottom=False)
+                _overlay_panel(ax, x_ref, x_vae, dc, dr, z_true, lb)
+                ax.set_yticks([0.6, 0.8, 1.0])
+            ax.set_xlim(lb, 1.0)
+            ax.set_xticks([0.6, 0.8, 1.0])
+            ax.tick_params(labelbottom=r == n - 1, labelleft=c == 0 and r > 0)
+            if r == n - 1:
+                ax.set_xlabel(LABELS_7D[dc])
+            if c == 0 and r > 0:
+                ax.set_ylabel(LABELS_7D[dr], rotation=0, ha="right", va="center")
 
     handles = [
-        mlines.Line2D([], [], color=RED, lw=3, label=r"Reference posterior $p(\mathbf{z}|\mathbf{m})$ (SMC)"),
-        mlines.Line2D([], [], color=BLUE, lw=3, label=label_vae + r" $q_\phi(\mathbf{z}|\mathbf{m})$"),
-        mlines.Line2D([], [], color="#555555", lw=1.8, ls="-", label="50 % (solid), 90 % (dashed), 99 % (dotted) HPD"),
-        mlines.Line2D([], [], color="#111111", marker="*", markerfacecolor="#FFD700", ls="--", lw=1.8, ms=13,
-                      label=r"True state $\mathbf{z}^*$"),
+        mpatches.Patch(facecolor=REF_FILL, edgecolor="none", label=REF_LABEL + ": marginal"),
+        mlines.Line2D([], [], color=REF_LINE, ls=REF_DASH, lw=1.0, label=REF_LABEL + ": 50 % and 90 % contours"),
+        mlines.Line2D([], [], color=VAE_LINE, lw=1.4, label=label_vae + ": marginal, 50 % and 90 % contours"),
+        mlines.Line2D([], [], color=TRUE_COLOR, lw=0.9, marker="*", ms=8, mec=TRUE_EDGE, mew=0.4, label=TRUE_LABEL),
     ]
-    fig.legend(handles=handles, loc="upper right", bbox_to_anchor=(0.985, 0.955), fontsize=12, frameon=True,
-               facecolor="#F8F9F9", edgecolor="#888888", title=legend_title, title_fontsize=13)
-
-    lines = [f"{'Param':<8} | {'True z*':<7} | {'Reference (mean±std)':<20} | {'VAE (mean±std)':<15} | std ratio",
-             "-" * 78]
-    for d in dims:
-        lines.append(f"{RAW_NAMES[d]:<8} | {z_true[d]:<7.3f} | {m_gt[d]:.3f} ± {s_gt[d]:.3f}        "
-                     f"| {m_q[d]:.3f} ± {s_q[d]:.3f}  | {s_q[d] / (s_gt[d] + 1e-12):.2f}")
-    lines += ["-" * 78, f"Mean |mu_VAE - mu_ref| = {np.mean(np.abs(m_q[dims] - m_gt[dims])):.4f}   "
-              f"mean std ratio = {np.mean(s_q[dims] / (s_gt[dims] + 1e-12)):.2f}"]
-    # statistics box in the empty upper triangle, right of the diagonal panels it spans
-    col_w, row_h = 0.925 / n, 0.89 / n
-    x0, y_top = (0.47, 0.775) if n >= 7 else (0.06 + 2 * col_w + 0.015, 0.94 - 1.25 * row_h)
-    fig.text(x0, y_top, "\n".join(lines), fontsize=10.5 if n >= 7 else 9.5, family="monospace", va="top",
-             bbox=dict(boxstyle="round,pad=0.6", facecolor="#FDFEFE", edgecolor="#BFC9CA", lw=1.5))
-    z_str = "[" + ", ".join(f"{float(v):.2f}" for v in z_true) + "]"
-    fig.suptitle(f"{title} | True $\\mathbf{{z}}^* = {z_str}$", fontsize=15, fontweight="bold", y=0.99)
-    fig.subplots_adjust(left=0.06, right=0.985, bottom=0.05, top=0.94, wspace=0.12, hspace=0.25)
-    save_figure(fig, save_path)
+    leg = fig.legend(handles=handles, loc="upper right", bbox_to_anchor=(1.0 - right / width, 1.0 - 0.06 / height))
+    box = leg.get_window_extent(fig.canvas.get_renderer()).transformed(fig.transFigure.inverted())
+    bar_h = 0.09 / height
+    cax = fig.add_axes([box.x0, box.y0 - 0.34 / height - bar_h, box.width, bar_h])
+    cb = fig.colorbar(mcm.ScalarMappable(mcolors.Normalize(0.0, 1.0), REF_CMAP), cax=cax, orientation="horizontal",
+                      ticks=[0.0, 0.5, 1.0])
+    cb.set_label("Reference posterior: joint density / peak of each panel", fontsize=9.5, labelpad=3)
+    cb.outline.set_linewidth(0.5)
+    cax.xaxis.set_label_position("top")
+    save_figure(fig, save_path, tight=False)
     plt.close(fig)
 
 
 # =============================================================================
 # 1-D MARGINALS STRIP
 # =============================================================================
-@fixed_style
-def strip_1d(x_gt, x_vae, z_true, lb, save_path, title, analytic_pdf=None,
-             analytic_label="VAE KS-mixture marginal (exact)"):
-    """analytic_pdf: optional callable (grid, d) -> exact marginal density of q (KS mixture or a baseline family)."""
-    n = x_gt.shape[1]
-    fig, axes = plt.subplots(1, n, figsize=(3.3 * n, 4.3), facecolor="white")
+@pub_style
+def strip_1d(x_ref, x_vae, z_true, lb, save_path):
+    """Overlay of the marginals of the two posteriors, one panel per parameter (each with its own density scale)."""
+    n = x_ref.shape[1]
+    fig, axes = plt.subplots(1, n, figsize=(FIG_WIDTH, 1.9))
+    fig.subplots_adjust(left=0.035, right=0.978, bottom=0.25, top=0.84, wspace=0.14)
     grid = np.linspace(lb, 1.0, 300)
-    for d in range(n):
-        ax = axes[d]
-        k_gt = kde_1d(x_gt[:, d], grid, lb)
-        k_q = kde_1d(x_vae[:, d], grid, lb)
-        ax.set_facecolor("#F8F9FA")
-        ax.fill_between(grid, k_gt, color=RED, alpha=0.22)
-        ax.plot(grid, k_gt, color=RED, lw=2.2, label="Reference posterior (SMC)")
-        ax.fill_between(grid, k_q, color=BLUE, alpha=0.25)
-        ax.plot(grid, k_q, color=BLUE, lw=2.2, label="VAE posterior (samples)")
-        if analytic_pdf is not None:
-            ax.plot(grid, analytic_pdf(grid, d), color="#2CA02C", ls="-.", lw=1.8, label=analytic_label)
-        ax.axvline(z_true[d], color="#111111", ls="--", lw=2.0, label="True value $z_i^*$")
-        ax.set_title(f"{TITLES_7D[d]}\nT={z_true[d]:.2f} | GT={np.mean(x_gt[:, d]):.2f} | Est={np.mean(x_vae[:, d]):.2f}",
-                     fontsize=10.5, fontweight="bold")
+    for d, ax in enumerate(axes):
+        k_ref, k_q = kde_1d(x_ref[:, d], grid, lb), kde_1d(x_vae[:, d], grid, lb)
+        ax.fill_between(grid, k_ref, color=REF_FILL, lw=0)
+        ax.plot(grid, k_ref, color=REF_LINE, ls=REF_DASH, lw=0.9)
+        ax.plot(grid, k_q, color=VAE_LINE, lw=1.3)
+        ax.axvline(z_true[d], color=TRUE_COLOR, lw=1.0)
         ax.set_xlim(lb, 1.0)
-        ax.set_ylim(0, None)
+        ax.set_ylim(0, 1.05 * max(k_ref.max(), k_q.max()))
+        ax.set_xticks([0.5, 0.75, 1.0], ["0.5", "0.75", "1.0"])
         ax.set_yticks([])
-        ax.grid(True, ls=":", alpha=0.4)
-    h, l = axes[0].get_legend_handles_labels()
-    fig.legend(h, l, loc="upper center", bbox_to_anchor=(0.5, 0.995), ncol=len(h), fontsize=11.5, frameon=True)
-    fig.suptitle(title, fontsize=13, fontweight="bold", y=1.04)
-    plt.tight_layout(rect=[0, 0, 1, 0.86])
-    save_figure(fig, save_path)
+        ax.set_xlabel(LABELS_7D[d])
+        despine(ax, ("top", "left", "right"))
+    axes[0].set_ylabel("Density")
+    handles = [mpatches.Patch(facecolor=REF_FILL, edgecolor=REF_LINE, ls=REF_DASH, label=REF_LABEL),
+               mlines.Line2D([], [], color=VAE_LINE, lw=1.4, label=VAE_LABEL),
+               mlines.Line2D([], [], color=TRUE_COLOR, lw=1.0, label=r"True value $z_i^*$")]
+    fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, 0.985), ncol=3)
+    save_figure(fig, save_path, tight=False)
     plt.close(fig)
 
 
 # =============================================================================
-# PHYSICAL PROFILE ALONG THE BRIDGE (violins)
+# MARGINAL UNCERTAINTY ALONG THE BRIDGE: VIOLINS OF THE POSTERIOR OF THE METHOD
 # =============================================================================
-@fixed_style
-def physical_profile(x_gt, x_vae, z_true, lb, save_path, title):
+@pub_style
+def physical_profile(x_post, z_true, lb, save_path, title=None, label="VAE posterior"):
+    """
+    Marginal uncertainty of every parameter along the structure: the outcome of the method, one distribution per
+    parameter where a deterministic approach gives one number. Width proportional to the marginal density (same maximum
+    width for every parameter; tails cut where the density falls below 1 % of its peak), central 95 % credible interval
+    (line) and true value (red star). The last two parameters are the bearings. `title` is optional (none in paper
+    figures).
+    """
     n = len(z_true)
-    fig, (ax, axb) = plt.subplots(2, 1, figsize=(15, 9), gridspec_kw={"height_ratios": [4, 1]}, sharex=True,
-                                  facecolor="white")
-    zg = np.linspace(lb, 1.0, 400)
+    n_deck = n - 2
+    x = np.arange(n, dtype=float)
+    x[n_deck:] += 0.6                                                # small gap between deck zones and bearings
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH, 3.1))
+    fig.subplots_adjust(left=0.085, right=0.99, top=0.81 if title else 0.88, bottom=0.185)
+    zg = np.linspace(lb, 1.0, 500)
+    ax.set_axisbelow(True)
+    ax.grid(axis="y")
     for i in range(n):
-        xc = i + 1
-        q = kde_1d(x_vae[:, i], zg, lb)
-        g = kde_1d(x_gt[:, i], zg, lb)
-        q = 0.38 * q / (q.max() + 1e-12)
-        g = 0.38 * g / (g.max() + 1e-12)
-        col = "steelblue" if i < 5 else "#2CA02C"
-        ax.fill_betweenx(zg, xc - q, xc + q, color=col, alpha=0.38,
-                         label=("VAE posterior (deck)" if i == 0 else ("VAE posterior (bearings)" if i == 5 else None)))
-        ax.plot(xc - g, zg, color=RED, ls="--", lw=1.6, label="Reference posterior" if i == 0 else None)
-        ax.plot(xc + g, zg, color=RED, ls="--", lw=1.6)
-        ax.plot(xc, z_true[i], "*", color="#FFD700", ms=17, mec="black", mew=1.2, zorder=10,
-                label=r"True $\mathbf{z}^*$" if i == 0 else None)
-    ax.axvline(5.5, color="#555555", ls="-.", lw=1.6)
-    ax.set_ylabel(r"Stiffness factor $\mathbf{z}$", fontsize=16)
-    ax.set_ylim(lb - 0.02, 1.02)
-    ax.grid(axis="y", alpha=0.3, ls=":")
-    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=4, fontsize=12)
-    fig.suptitle(title, fontsize=13, fontweight="bold")
-    im = axb.imshow(z_true.reshape(1, -1), cmap="YlOrRd_r", norm=mcolors.Normalize(lb, 1.0), aspect="auto",
-                    extent=[0.5, n + 0.5, 0, 1])
-    for j in range(n):
-        axb.text(j + 1, 0.5, f"{z_true[j]:.2f}", ha="center", va="center", fontsize=15, fontweight="bold",
-                 color="white" if z_true[j] < 0.62 else "black")
-    axb.set_yticks([])
-    axb.set_xticks(np.arange(1, n + 1), LABELS_7D[:n], fontsize=15)
-    fig.colorbar(im, ax=axb, fraction=0.02, pad=0.01, label=r"$\mathbf{z}^*$")
-    plt.tight_layout(rect=[0, 0, 1, 0.93])
-    save_figure(fig, save_path)
+        dens = kde_1d(x_post[:, i], zg, lb)
+        keep = np.where(dens >= 0.01 * dens.max())[0]
+        zz, ww = zg[keep[0]:keep[-1] + 1], 0.38 * dens[keep[0]:keep[-1] + 1] / dens.max()
+        ax.fill_betweenx(zz, x[i] - ww, x[i] + ww, color=VAE_FILL, lw=0, zorder=2)
+        ax.plot(np.r_[x[i] - ww, (x[i] + ww)[::-1], x[i] - ww[0]], np.r_[zz, zz[::-1], zz[0]], color=VAE_LINE, lw=0.7,
+                zorder=3)
+        low, high = np.quantile(x_post[:, i], [0.025, 0.975])
+        ax.plot([x[i], x[i]], [low, high], color=VAE_LINE, lw=1.1, solid_capstyle="butt", zorder=4)
+        ax.plot(x[i], z_true[i], marker="*", color=TRUE_COLOR, ms=9, mec="white", mew=0.4, ls="none", zorder=5,
+                clip_on=False)
+    ax.set_xlim(x[0] - 0.6, x[-1] + 0.6)
+    ax.set_ylim(lb - 0.012, 1.012)
+    ax.set_xticks(x, LABELS_7D[:n], fontsize=10)
+    ax.set_yticks(np.arange(0.5, 1.01, 0.1))
+    ax.tick_params(axis="x", length=0)
+    ax.set_ylabel(r"Stiffness factor $z$")
+    despine(ax)
+    trans = ax.get_xaxis_transform()                                 # x in data units, y in axes fraction
+    for a, b, name in ((x[0], x[n_deck - 1], "Deck zones"), (x[n_deck], x[-1], "Bearings")):
+        ax.plot([a - 0.42, b + 0.42], [-0.115, -0.115], color="0.3", lw=0.7, transform=trans, clip_on=False)
+        ax.text(0.5 * (a + b), -0.135, name, transform=trans, ha="center", va="top", fontsize=9.5)
+    handles = [mpatches.Patch(facecolor=VAE_FILL, edgecolor=VAE_LINE, label=label),
+               mlines.Line2D([], [], color=VAE_LINE, lw=1.1, label="95 % credible interval"),
+               mlines.Line2D([], [], color=TRUE_COLOR, ls="none", marker="*", ms=9, mec="white", mew=0.4,
+                             label=r"True value $z_i^*$")]
+    ax.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, 1.03), ncol=3)
+    if title:
+        fig.suptitle(title, fontsize=9, y=0.99)
+    save_figure(fig, save_path, tight=False)
     plt.close(fig)

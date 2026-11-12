@@ -17,7 +17,7 @@ Output/model_comparison/<data set>/:
                                   with the SMC reference posteriors of the benchmarks, cost.
   Fig_KS_components.png/.pdf      selection of K;   Fig_model_comparison.png/.pdf  reliability diagrams (A and B).
 
-    python MODULES/model_comparison/compare_models.py --data 03Nov_FINAL_GirderBearings_7D_5sensors_5modes
+    python MODULES/model_comparison/compare_models.py --data 06Nov_FINAL_SlabS10_7D_5sensors_5modes
 """
 
 import os
@@ -289,7 +289,7 @@ def compare_families(rows, K_star, out_dir):
 
 def main():
     parser = argparse.ArgumentParser(description="K selection and comparison with the baselines (R1.4).")
-    parser.add_argument("--data", default="03Nov_FINAL_GirderBearings_7D_5sensors_5modes", help="data set folder name")
+    parser.add_argument("--data", default="06Nov_FINAL_SlabS10_7D_5sensors_5modes", help="data set folder name")
     parser.add_argument("--runs", nargs="*", default=None, help="run folders (default: every evaluated run)")
     parser.add_argument("--K", type=int, default=None, help="K of the proposed model in the R1.4 table "
                                                             "(default: the selected K*)")

@@ -8,16 +8,22 @@ Figures and metrics of a trained run (Output/review29oct_fixed/<run>):
      entropy and its copula / marginal parts, likelihood temperature and learning rate (train and validation);
   2. Global_Test_Metrics.json + Fig_calibration.png: RMSE of the posterior mean, coverage of z* by the central
      credible intervals of the exact KS-mixture marginals (zones and bearings), interval width, false alarms;
-  3. GT_Comp/ for every benchmark (reference posterior by SMC, same likelihood and gamma as training):
-       P{pos}_GT.png, P{pos}_VAE.png                       single corner plots
-       P{pos}_Overlay.png, P{pos}_ActiveSubspace_Overlay.png reference (red) vs VAE (blue)
-       P{pos}_1D.png                                       1-D marginals (+ exact KS-mixture density)
-       Physical_PDF_Profiles/Sample_{pos}_UQ_Violin.png
+  3. Benchmarks_VAE_vs_reference/ for every benchmark (reference posterior by SMC, same likelihood and gamma as training):
+       P{pos}_Overlay.png                                      reference (shaded density) vs VAE (contours)
+       P{pos}_1D.png                                           overlay of the 1-D marginals
+       P{pos}_GT.png, P{pos}_VAE.png                           single corner plots, only with --single-corners
+     Benchmarks_violins/Sample_{pos}_UQ_Violin.png             marginal uncertainty of the VAE posterior per parameter
      GT_vs_Posterior_Metrics.csv/.json and Fig_benchmark_summary.png.
+
+All figures are drawn at their printed width (plotting.FIG_WIDTH) and carry no titles or statistics: the test set and
+the scenario of each figure are given by its folder, its file name and GT_vs_Posterior_Metrics.csv.
 
 The VAE posterior is plotted as it is: samples of q(z|m). Nothing is re-weighted with the likelihood,
 filtered or mirrored (review29oct re-weighted q by the likelihood, i.e. plotted q x L instead of q, kept the
 heaviest 95 % of the weight and mirrored half of the samples for the "bimodal" cases).
+
+POSTPROCESSING_RUNNING.txt / POSTPROCESSING_DONE.txt in the run folder tell whether it is complete: test set B is only
+written after test set A, so a copy of the folder taken before POSTPROCESSING_DONE.txt appears is an unfinished snapshot.
 
     python MODULES/review29oct_fixed/postprocessing.py --run-folder KSVAE_fixed_7D_3KS_obs-fvr_Gamma1.0_Ep1500
 """
@@ -26,6 +32,8 @@ import os
 import re
 import sys
 import json
+import time
+import socket
 import argparse
 
 try:
@@ -61,60 +69,66 @@ from MODULES.review29oct_fixed import plotting as P
 # =============================================================================
 # 1. LOSS HISTORY
 # =============================================================================
-@P.fixed_style
-def plot_training_history(folder_path, warmup=None):
+@P.pub_style
+def plot_training_history(folder_path, warmup=None, obs_types=None):
+    """Training history. Solid lines: training set; dashed lines: validation set. Unobserved quantities are not drawn."""
     hist_path = os.path.join(folder_path, "model_history.npy")
     if not os.path.exists(hist_path):
         print("  no model_history.npy, skipping the loss curves")
         return
     h = np.load(hist_path, allow_pickle=True).item()
     ep = np.arange(1, len(h["loss"]) + 1)
+    start = int(warmup or 0)
 
-    def curve(ax, key, color, label, ls="-", val=True):
+    def curve(ax, key, color, label=None):
         if key in h:
-            ax.plot(ep, h[key], color=color, ls=ls, lw=1.6, label=f"{label} (train)")
-        if val and f"val_{key}" in h:
-            ax.plot(ep, h[f"val_{key}"], color=color, ls="--", lw=1.6, alpha=0.8, label=f"{label} (val)")
+            ax.plot(ep, h[key], color=color, lw=0.9, label=label)
+        if f"val_{key}" in h:
+            ax.plot(ep, h[f"val_{key}"], color=color, ls="--", lw=0.8)
 
-    fig, ax = plt.subplots(2, 3, figsize=(20, 10.5), facecolor="white")
-    curve(ax[0, 0], "loss", "#1F77B4", r"$\tau\,E_q[\mathrm{NLL}] - \gamma^2 H[q]$")
-    ax[0, 0].set_title("Training loss (with the warm-up temperature)", fontweight="bold")
-    curve(ax[0, 1], "neg_elbo", "#D62728", r"$-$ELBO ($\tau$ = 1)")
-    ax[0, 1].set_title(r"Negative ELBO $E_q[\mathrm{NLL}] - \gamma^2 H[q]$ (model selection)", fontweight="bold")
-    curve(ax[0, 2], "NLL", "k", r"$E_q[\mathrm{NLL}]$")
-    curve(ax[0, 2], "NLL_freq", "#1F77B4", "frequencies")
-    curve(ax[0, 2], "NLL_vert", "#2CA02C", "vertical shapes")
-    curve(ax[0, 2], "NLL_rot", "#9467BD", "rotational shapes")
-    ax[0, 2].set_yscale("log")
-    ax[0, 2].set_title("Expected negative log-likelihood and its terms", fontweight="bold")
-    curve(ax[1, 0], "Entropy", "k", r"$H[q]$")
-    curve(ax[1, 0], "Entropy_copula", "#FF7F0E", r"copula $\frac{1}{2}\log\det R$")
-    curve(ax[1, 0], "Entropy_marginals", "#17BECF", r"marginals $\sum_d H[q_d]$")
-    ax[1, 0].set_title("Entropy of q and its parts", fontweight="bold")
-    if "val_neg_elbo" in h:
-        start = int(warmup or 0)
-        v = np.asarray(h["val_neg_elbo"])
-        ax[1, 1].plot(ep[start:], v[start:], color="#D62728", lw=1.6, label=r"$-$ELBO (val)")
-        ax[1, 1].plot(ep[start:], np.asarray(h["neg_elbo"])[start:], color="#D62728", lw=1.0, alpha=0.5, label=r"$-$ELBO (train)")
-        ax[1, 1].set_title("Negative ELBO after the warm-up (zoom)", fontweight="bold")
+    fig, ax = plt.subplots(2, 3, figsize=(P.FIG_WIDTH, 4.6))
+    fig.subplots_adjust(left=0.07, right=0.985, top=0.95, bottom=0.165, wspace=0.33, hspace=0.38)
+    curve(ax[0, 0], "loss", "k")
+    ax[0, 0].set_title(r"(a) Loss $\tau\,E_q[\mathrm{NLL}] - \gamma^2 H[q]$")
+    curve(ax[0, 1], "neg_elbo", "k")
+    ax[0, 1].set_title(r"(b) Negative ELBO ($\tau = 1$)")
+    monitor = np.asarray(h.get("monitor_neg_elbo", []), dtype=float)
+    if np.isfinite(monitor).any():            # the low-noise estimate that selected the weights (one value every N epochs)
+        ok = np.isfinite(monitor)
+        ax[0, 2].plot(ep[ok], monitor[ok], color="k", lw=0.9)
+        ax[0, 2].set_title(r"(c) Validation $-$ELBO monitor")
+    elif "val_neg_elbo" in h:
+        ax[0, 2].plot(ep[start:], np.asarray(h["val_neg_elbo"])[start:], color="k", ls="--", lw=0.6)
+        ax[0, 2].set_title("(c) Negative ELBO after warm-up")
+    curve(ax[1, 0], "NLL", "k", "total")
+    curve(ax[1, 0], "NLL_freq", P.GROUP_COLORS["deck"], "frequencies")
+    curve(ax[1, 0], "NLL_vert", "#009E73", "vertical shapes")
+    if "r" in (obs_types or "fvr"):
+        curve(ax[1, 0], "NLL_rot", "#CC79A7", "rotational shapes")
+    ax[1, 0].set_yscale("log")
+    ax[1, 0].set_title(r"(d) $E_q[\mathrm{NLL}]$ and its terms")
+    curve(ax[1, 1], "Entropy", "k", r"$H[q]$")
+    curve(ax[1, 1], "Entropy_copula", P.GROUP_COLORS["bearings"], r"copula, $\frac{1}{2}\log\det\mathbf{R}$")
+    curve(ax[1, 1], "Entropy_marginals", P.GROUP_COLORS["deck"], r"marginals, $\sum_d H[q_d]$")
+    ax[1, 1].set_title("(e) Entropy of $q$ and its parts")
     if "tau" in h:
-        ax[1, 2].plot(ep, h["tau"], color="#8C564B", lw=2, label=r"likelihood temperature $\tau$")
-        ax[1, 2].set_yscale("log")
+        ax[1, 2].plot(ep, h["tau"], color="#D55E00", lw=1.1, label=r"temperature $\tau$")
     if "lr" in h:
-        a2 = ax[1, 2].twinx()
-        a2.plot(ep, h["lr"], color="#7F7F7F", lw=2, ls=":", label="learning rate")
-        a2.set_yscale("log")
-        a2.set_ylabel("learning rate")
-        a2.legend(loc="lower right")
-    ax[1, 2].set_title("Warm-up and learning-rate schedules", fontweight="bold")
+        ax[1, 2].plot(ep, h["lr"], color="0.35", lw=1.1, label="learning rate")
+    ax[1, 2].set_yscale("log")
+    ax[1, 2].set_title("(f) Schedules")
     for a in ax.ravel():
-        a.set_xlabel("epoch")
-        a.grid(True, ls=":", alpha=0.5)
+        a.grid(True)
+        a.set_axisbelow(True)
+        P.despine(a)
         if a.get_legend_handles_labels()[0]:
-            a.legend(fontsize=9)
-    fig.suptitle(f"Training history: {os.path.basename(folder_path)}", fontsize=15, fontweight="bold")
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
-    P.save_figure(fig, os.path.join(folder_path, "Training_Loss_Curves.png"))
+            a.legend(fontsize=7.5, borderaxespad=0.6)
+    for a in ax[1]:
+        a.set_xlabel("Epoch")
+    fig.legend(handles=[plt.Line2D([], [], color="0.3", lw=1.0, label="training set"),
+                        plt.Line2D([], [], color="0.3", lw=1.0, ls="--", label="validation set")],
+               loc="lower center", bbox_to_anchor=(0.5, 0.012), ncol=2)
+    P.save_figure(fig, os.path.join(folder_path, "Training_Loss_Curves.png"), tight=False)
     plt.close(fig)
 
 
@@ -137,7 +151,7 @@ def marginal_quantiles(a, b, w, probs, lbound, n_grid=4001, chunk=100):
     return lbound + (1.0 - lbound) * q, lbound + (1.0 - lbound) * mean
 
 
-@P.fixed_style
+@P.pub_style
 def global_test_metrics(preds, z_true, lbound, folder_path, threshold=C.DAMAGE_THRESHOLD, suffix="", label="test set"):
     """preds: Test_predicted_props dictionary or posterior family (posterior_families.py) of any model."""
     levels = np.array([0.5, 0.68, 0.8, 0.9, 0.95, 0.99])
@@ -162,29 +176,37 @@ def global_test_metrics(preds, z_true, lbound, folder_path, threshold=C.DAMAGE_T
         "coverage_by_level_zones": dict(zip(levels.tolist(), inside[:, zones].mean(axis=(0, 1)).tolist())),
         "coverage_by_level_bearings": dict(zip(levels.tolist(), inside[:, bearings].mean(axis=(0, 1)).tolist())),
         "note": "coverage of z* is only expected to be nominal on average over the prior; the test set follows the DoE",
+        "test_set": label,
     }
     with open(os.path.join(folder_path, f"Global_Test_Metrics{suffix}.json"), "w", encoding="utf-8") as fh:
         json.dump(metrics, fh, indent=2)
 
-    fig, ax = plt.subplots(1, 2, figsize=(13, 5), facecolor="white")
-    ax[0].plot([0, 1], [0, 1], "k--", lw=1)
-    ax[0].plot(levels, inside[:, zones].mean(axis=(0, 1)), "o-", label="deck zones")
-    ax[0].plot(levels, inside[:, bearings].mean(axis=(0, 1)), "s-", label="bearings")
-    ax[0].set_xlabel("nominal level of the central credible interval")
-    ax[0].set_ylabel("fraction of test parameters with z* inside")
-    ax[0].set_title(f"Calibration of the VAE marginals ({label})", fontweight="bold")
-    ax[0].legend()
-    ax[0].grid(alpha=0.4, ls=":")
-    ax[1].scatter(z_true[:, zones].ravel(), mean[:, zones].ravel(), s=5, alpha=0.4, label="deck zones")
-    ax[1].scatter(z_true[:, bearings].ravel(), mean[:, bearings].ravel(), s=5, alpha=0.4, label="bearings")
-    ax[1].plot([lbound, 1], [lbound, 1], "k--", lw=1)
-    ax[1].set_xlabel("true z*")
-    ax[1].set_ylabel(r"posterior mean $E_q[z]$")
-    ax[1].set_title(f"Posterior mean vs truth ({label})", fontweight="bold")
-    ax[1].legend()
-    ax[1].grid(alpha=0.4, ls=":")
-    plt.tight_layout()
-    P.save_figure(fig, os.path.join(folder_path, f"Fig_calibration{suffix}.png"))
+    deck, bear = P.GROUP_COLORS["deck"], P.GROUP_COLORS["bearings"]
+    cov_deck, cov_bear = inside[:, zones].mean(axis=(0, 1)), inside[:, bearings].mean(axis=(0, 1))
+    fig, ax = plt.subplots(1, 2, figsize=(P.FIG_WIDTH, 3.45))
+    fig.subplots_adjust(left=0.08, right=0.985, top=0.83, bottom=0.135, wspace=0.26)
+    ax[0].plot([0, 1], [0, 1], color="k", ls="--", lw=0.8, label="ideal")
+    ax[0].plot(levels, cov_deck, "-o", ms=3.5, color=deck, label="deck zones")
+    ax[0].plot(levels, cov_bear, "-s", ms=3.5, color=bear, label="bearings")
+    ax[0].set_xlim(0.45, 1.0)
+    ax[0].set_ylim(min(0.45, cov_deck.min() - 0.05, cov_bear.min() - 0.05), 1.0)
+    ax[0].set_xlabel("Nominal level of the central credible interval")
+    ax[0].set_ylabel("Empirical coverage of $z^*$")
+    ax[0].set_title("(a) Coverage")
+    ax[1].scatter(z_true[:, zones].ravel(), mean[:, zones].ravel(), s=2.5, alpha=0.35, lw=0, color=deck, rasterized=True)
+    ax[1].scatter(z_true[:, bearings].ravel(), mean[:, bearings].ravel(), s=2.5, alpha=0.35, lw=0, color=bear, rasterized=True)
+    ax[1].plot([lbound, 1], [lbound, 1], color="k", ls="--", lw=0.8)
+    ax[1].set_xlim(lbound, 1.0)
+    ax[1].set_ylim(lbound, 1.0)
+    ax[1].set_xlabel("True value $z^*$")
+    ax[1].set_ylabel(r"Posterior mean $E_q[z]$")
+    ax[1].set_title("(b) Posterior mean vs true value")
+    for a in ax:
+        a.grid(True)
+        a.set_axisbelow(True)
+        P.despine(a)
+    fig.legend(*ax[0].get_legend_handles_labels(), loc="upper center", bbox_to_anchor=(0.5, 0.985), ncol=3)
+    P.save_figure(fig, os.path.join(folder_path, f"Fig_calibration{suffix}.png"), tight=False)
     plt.close(fig)
     return metrics
 
@@ -266,8 +288,8 @@ def copula_correlations(preds):
     return L @ np.swapaxes(L, -1, -2)
 
 
-@P.fixed_style
-def copula_correlation_summary(preds, z_true, labels, out_dir, title, threshold=C.DAMAGE_THRESHOLD):
+@P.pub_style
+def copula_correlation_summary(preds, z_true, labels, out_dir, title=None, threshold=C.DAMAGE_THRESHOLD):
     """
     Where does the VAE find correlations? Copula correlations of every test sample, grouped by the damage state of the
     pair: adjacent deck zones with 0, 1 or 2 damaged members, end zone - bearing pairs, the two bearings and opposite
@@ -297,31 +319,42 @@ def copula_correlation_summary(preds, z_true, labels, out_dir, title, threshold=
     n_deck_dam = dam[:, :C.N_ZONES].sum(axis=1)
     mats = {"undamaged scenarios": R[(n_deck_dam == 0) & (dam[:, C.N_ZONES:].sum(axis=1) == 0)].mean(axis=0),
             r"$\geq$2 damaged deck zones": R[n_deck_dam >= 2].mean(axis=0)}
-    fig = plt.figure(figsize=(18, 5.4))
-    gs = fig.add_gridspec(1, 3, width_ratios=[1.6, 1, 1])
-    ax = fig.add_subplot(gs[0])
+    fig = plt.figure(figsize=(P.FIG_WIDTH, 5.5))
+    gs = fig.add_gridspec(2, 2, height_ratios=[1.0, 1.42], left=0.085, right=0.905, top=0.96 if not title else 0.92,
+                          bottom=0.045, hspace=0.34, wspace=0.16)
+    ax = fig.add_subplot(gs[0, :])
     keys = list(groups)
-    ax.boxplot([groups[k] for k in keys], showfliers=False, widths=0.6, medianprops=dict(color="#D62728", lw=1.6))
-    ax.set_xticks(np.arange(1, len(keys) + 1), keys, fontsize=9.5)
-    ax.axhline(0, color="gray", lw=0.8, ls=":")
-    ax.set_ylabel(f"{dep[0].upper() + dep[1:]} of the VAE posterior")
-    ax.set_title("(a) Correlation by type of pair and damage state", fontsize=12)
-    ax.grid(axis="y", ls=":", alpha=0.5)
+    line = dict(lw=0.7, color="0.2")
+    ax.boxplot([groups[k] for k in keys], showfliers=False, widths=0.55, boxprops=line, whiskerprops=line, capprops=line,
+               medianprops=dict(color=P.VAE_LINE, lw=1.4))
+    ax.set_xticks(np.arange(1, len(keys) + 1), keys, fontsize=8.5)
+    ax.tick_params(axis="x", length=0)
+    ax.axhline(0, color="0.5", lw=0.6, ls=":")
+    ax.set_ylabel(f"{dep[0].upper() + dep[1:]}")
+    ax.set_title("(a) Correlation by type of pair and damage state")
+    ax.grid(axis="y")
+    ax.set_axisbelow(True)
+    P.despine(ax)
     im = None
     for j, (k, M) in enumerate(mats.items()):
-        a = fig.add_subplot(gs[j + 1])
+        a = fig.add_subplot(gs[1, j])
         M = M.copy()
         np.fill_diagonal(M, np.nan)
         im = a.imshow(M, cmap="RdBu_r", vmin=-0.6, vmax=0.6)
         for (i, jj), v in np.ndenumerate(M):
             if np.isfinite(v):
-                a.text(jj, i, f"{v:.2f}", ha="center", va="center", fontsize=7.5)
+                a.text(jj, i, f"{v:.2f}", ha="center", va="center", fontsize=7)
         a.set_xticks(range(C.N_DIMS), P.LABELS_7D, fontsize=9)
-        a.set_yticks(range(C.N_DIMS), P.LABELS_7D, fontsize=9)
-        a.set_title(f"({'bc'[j]}) Mean correlation, {k}", fontsize=12)
-    fig.colorbar(im, ax=fig.axes[1:], fraction=0.025, pad=0.02, label=dep)
-    fig.suptitle(title, fontsize=13, y=1.02)
-    P.save_figure(fig, os.path.join(out_dir, "Fig_copula_correlations.png"))
+        a.set_yticks(range(C.N_DIMS), P.LABELS_7D if j == 0 else [""] * C.N_DIMS, fontsize=9)
+        a.tick_params(length=0)
+        a.set_title(f"({'bc'[j]}) Mean correlation, {k}")
+    pos = fig.axes[-1].get_position()
+    cb = fig.colorbar(im, cax=fig.add_axes([0.92, pos.y0, 0.016, pos.height]))
+    cb.set_label(dep, fontsize=9.5)
+    cb.outline.set_linewidth(0.5)
+    if title:
+        fig.suptitle(title, fontsize=9.5, y=0.985)
+    P.save_figure(fig, os.path.join(out_dir, "Fig_copula_correlations.png"), tight=False)
     plt.close(fig)
     return pd.DataFrame(rows)
 
@@ -351,7 +384,7 @@ METRIC_DEFINITIONS = {
 }
 
 
-@P.fixed_style
+@P.pub_style
 def manuscript_metrics(preds, z_true, lbound, folder_path, suffix="", label="test set", labels=None, n_samples=500,
                        seed=0, threshold=C.DAMAGE_THRESHOLD):
     """
@@ -469,32 +502,28 @@ def manuscript_metrics(preds, z_true, lbound, folder_path, suffix="", label="tes
 
     names = {"all_7": "all parameters", "damaged_params": r"damaged ($z^*<0.95$)",
              "healthy_params": r"undamaged ($z^*\geq0.95$)", "prior_scenarios": "scenarios drawn from the prior"}
-    fig, ax = plt.subplots(1, 3, figsize=(16.5, 5.6), sharey=True)
+    fig, ax = plt.subplots(1, 3, figsize=(P.FIG_WIDTH, 3.0), sharey=True)
+    fig.subplots_adjust(left=0.075, right=0.985, top=0.925, bottom=0.285, wspace=0.1)
     for j, (key, title) in enumerate((("empirical_coverage", "(a) Equal-tailed intervals"),
                                       ("empirical_coverage_HPD", "(b) Highest-density intervals"),
                                       ("empirical_coverage_gauss", r"(c) $\bar{z}\pm k\sigma$ intervals"))):
-        ax[j].plot([0, 1], [0, 1], "k--", lw=1.5, label="ideal calibration")
-        ax[j].fill_between(MACE_LEVELS, MACE_LEVELS - 0.05, MACE_LEVELS + 0.05, color="gray", alpha=0.15, lw=0,
+        ax[j].fill_between(MACE_LEVELS, MACE_LEVELS - 0.05, MACE_LEVELS + 0.05, color="0.88", lw=0,
                            label=r"$\pm0.05$ band")
-        maces = []
-        for g, mk, col in (("all_7", "s-", "#D62728"), ("damaged_params", "o-", "#1F77B4"),
-                           ("healthy_params", "^-", "#2CA02C"), ("prior_scenarios", "d-", "#9467BD")):
+        ax[j].plot([0, 1], [0, 1], color="k", ls="--", lw=0.8, label="ideal calibration")
+        for g, mk, col in (("all_7", "s", "#000000"), ("damaged_params", "o", "#D55E00"),
+                           ("healthy_params", "^", "#0072B2"), ("prior_scenarios", "D", "#009E73")):
             if g in res:
-                mace = np.mean(np.abs(np.array(res[g][key]) - MACE_LEVELS))
-                ax[j].plot(MACE_LEVELS, res[g][key], mk, color=col, lw=1.6, ms=5, label=names[g])
-                maces.append((col, f"MACE = {mace:.3f}"))
-        for k, (col, txt) in enumerate(maces):           # MACE of each group in the empty upper-left corner
-            ax[j].text(0.03, 0.97 - 0.065 * k, txt, color=col, fontsize=10, va="top", transform=ax[j].transAxes)
+                ax[j].plot(MACE_LEVELS, res[g][key], "-", marker=mk, ms=3, markevery=2, color=col, lw=1.1, label=names[g])
         ax[j].set_xlim(0, 1)
-        ax[j].set_ylim(0, 1.02)
+        ax[j].set_ylim(0, 1)
         ax[j].set_aspect("equal")
         ax[j].set_xlabel("Nominal level $p$")
-        ax[j].set_title(title, fontsize=13)
-        ax[j].grid(True, ls=":", alpha=0.6)
+        ax[j].set_title(title)
+        ax[j].grid(True)
+        ax[j].set_axisbelow(True)
     ax[0].set_ylabel(r"Empirical coverage $\hat{p}$")
-    fig.legend(*ax[0].get_legend_handles_labels(), loc="lower center", ncol=6, fontsize=10.5, frameon=False,
-               bbox_to_anchor=(0.5, -0.06))
-    P.save_figure(fig, os.path.join(folder_path, f"Fig_reliability{suffix}.png"))
+    fig.legend(*ax[0].get_legend_handles_labels(), loc="lower center", bbox_to_anchor=(0.5, 0.012), ncol=3)
+    P.save_figure(fig, os.path.join(folder_path, f"Fig_reliability{suffix}.png"), tight=False)
     plt.close(fig)
     return res, table
 
@@ -523,17 +552,6 @@ def energy_distance(x, y, n=1500, seed=0):
     return float(2 * mean_dist(x, y) - mean_dist(x, x) - mean_dist(y, y))
 
 
-def active_subspace(z_true, threshold=C.DAMAGE_THRESHOLD):
-    mirror = {0: 4, 1: 3, 2: 2, 3: 1, 4: 0, 5: 6, 6: 5}
-    active = {d for d in range(len(z_true)) if z_true[d] < threshold}
-    active |= {mirror[d] for d in list(active)}
-    active |= {5, 6}
-    for cand in [0, 2, 4, 1, 3]:
-        if len(active) < 4:
-            active.add(cand)
-    return sorted(active)
-
-
 # =============================================================================
 # 4. DRIVER
 # =============================================================================
@@ -554,15 +572,36 @@ def load_run_info(folder_path):
     return info
 
 
-def run_postprocessing(folder_path, positions=None, n_q=4000, n_particles=4000, workers=None, recompute_gt=False):
+STATUS_RUNNING, STATUS_DONE = "POSTPROCESSING_RUNNING.txt", "POSTPROCESSING_DONE.txt"
+
+
+def mark_status(folder_path, finished, note=""):
+    """Leaves POSTPROCESSING_RUNNING.txt while the figures are being written and POSTPROCESSING_DONE.txt at the end."""
+    for name in (STATUS_RUNNING, STATUS_DONE):
+        if os.path.exists(os.path.join(folder_path, name)):
+            os.remove(os.path.join(folder_path, name))
+    stamp = f"{time.strftime('%Y-%m-%d %H:%M:%S %Z')} on {socket.gethostname()}"
+    text = (f"Post-processing finished {stamp}.\n{note}\n" if finished else
+            f"Post-processing started {stamp}.\nUntil POSTPROCESSING_DONE.txt replaces this file the folder is incomplete "
+            "(still running, or interrupted): test set B is only written after test set A.\n")
+    with open(os.path.join(folder_path, STATUS_DONE if finished else STATUS_RUNNING), "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+def run_postprocessing(folder_path, positions=None, n_q=4000, n_particles=4000, workers=None, recompute_gt=False,
+                       single_corners=False):
     if not os.path.isabs(folder_path) and not os.path.exists(folder_path):
         folder_path = os.path.join(C.OUTPUT_DIR, folder_path)
     print(f"\n=== Post-processing {folder_path} ===")
     info = load_run_info(folder_path)
-    plot_training_history(folder_path, warmup=info.get("warmup"))
+    mark_status(folder_path, False)
+    plot_training_history(folder_path, warmup=info.get("warmup"), obs_types=info.get("obs_types"))
     out = {}
     for split in info.get("test_sets", ["test"]):
-        out[split] = postprocess_test_set(folder_path, info, split, positions, n_q, n_particles, workers, recompute_gt)
+        out[split] = postprocess_test_set(folder_path, info, split, positions, n_q, n_particles, workers, recompute_gt,
+                                          single_corners)
+    done = [TEST_SET_DIRS.get(s, s) for s in info.get("test_sets", ["test"])]
+    mark_status(folder_path, True, f"Test sets: {', '.join(done)}. Benchmarks: {'all' if positions is None else positions}.")
     return out
 
 
@@ -582,6 +621,8 @@ def print_metric_tables(table, title):
 def write_results_guide(folder_path, info):
     """RESULTS_GUIDE.txt: which folder corresponds to which test set."""
     lines = [f"Run: {os.path.basename(folder_path)}", f"Data set: {os.path.basename(info['data_dir'])}", "",
+             f"{STATUS_DONE} appears when both test sets are finished. While {STATUS_RUNNING} is here, the folder is",
+             "incomplete (test set B is only written after test set A).", "",
              "Both test sets contain the same 1200 as-built structures (damage states, mass and stiffness deviations)",
              "and the same measurement-noise draws; they differ only in the FE model that generated the data.", ""]
     for split in ("test", "test_fine"):
@@ -591,9 +632,13 @@ def write_results_guide(folder_path, info):
                   "  Fig_reliability.png/.pdf      reliability diagrams (three interval definitions)",
                   "  Fig_calibration.png/.pdf      coverage per level and posterior mean vs truth",
                   "  Fig_copula_correlations.*     copula correlations of the VAE over the test set, by damage state",
-                  "  Benchmarks_VAE_vs_reference/  benchmarks P0-P10: VAE vs reference posterior (SMC)",
-                  "  Benchmarks_violins/           violin plots of the benchmarks", ""]
-    lines += ["Localized_scenarios/   extra localized-damage scenarios (refined 50-element model)",
+                  "  Benchmarks_VAE_vs_reference/  benchmarks P0-P10, VAE vs reference posterior (SMC):",
+                  "      P*_Overlay                              corner plots of all parameters",
+                  "      P*_1D                                   overlay of the marginals",
+                  "      GT_vs_Posterior_Metrics.csv, Fig_benchmark_summary   scenarios and agreement with the reference",
+                  "  Benchmarks_violins/           marginal uncertainty of the VAE posterior, per parameter", ""]
+    lines += ["Posterior_quality/     validation -ELBO, KL lower bound, Pareto-k (evaluate_posterior_quality.py)",
+              "Localized_scenarios/   extra localized-damage scenarios (refined 50-element model)",
               "Showcase/               curated scenarios with replicas (showcase_study.py)",
               "Training_Loss_Curves.png/.pdf  training history"]
     with open(os.path.join(folder_path, "RESULTS_GUIDE.txt"), "w", encoding="utf-8") as fh:
@@ -617,14 +662,15 @@ def run_test_metrics(folder_path):
         os.makedirs(sub, exist_ok=True)
         global_test_metrics(fam, z_test, lbound, sub, label=name)
         _, out[split] = manuscript_metrics(fam, z_test, lbound, sub, label=name, labels=labels)
-        copula_correlation_summary(fam, z_test, labels, sub, name)
+        copula_correlation_summary(fam, z_test, labels, sub)
         print_metric_tables(out[split], f"{os.path.basename(folder_path)} | {name}")
     write_results_guide(folder_path, info)
     return out
 
 
-def postprocess_test_set(folder_path, info, split, positions, n_q, n_particles, workers, recompute_gt):
-    """'test' (same model as training) -> GT_Comp/; any other test set -> GT_Comp_<name>/."""
+def postprocess_test_set(folder_path, info, split, positions, n_q, n_particles, workers, recompute_gt,
+                         single_corners=False):
+    """Metrics and figures of one test set, in its own folder (TEST_SET_DIRS)."""
     suffix = "" if split == "test" else f"_{split}"
     preds_file = os.path.join(folder_path, f"Test_predicted_props{suffix}.npy")
     if not os.path.exists(preds_file):
@@ -650,7 +696,7 @@ def postprocess_test_set(folder_path, info, split, positions, n_q, n_particles, 
     labels = np.load(os.path.join(data_dir, f"labels_{split}.npy"))
     _, table = manuscript_metrics(fam, z_test, lbound, sub, label=name, labels=labels)
     print_metric_tables(table, name)
-    copula_correlation_summary(fam, z_test, labels, sub, name)
+    copula_correlation_summary(fam, z_test, labels, sub)
     write_results_guide(folder_path, info)
 
     descs = {b["pos"]: b["desc"] for b in pcfg["benchmarks"]}
@@ -695,21 +741,15 @@ def postprocess_test_set(folder_path, info, split, positions, n_q, n_particles, 
               f"{row['mean_std_ratio_VAE_over_ref']:.2f} [{row['min_std_ratio']:.2f}, {row['max_std_ratio']:.2f}]  "
               f"W1 = {row['mean_W1']:.4f}  z* in 95%: ref {row['zstar_in_ref95']}/7, VAE {row['zstar_in_VAE95']}/7")
 
-        tag = f"Sample {pos} ({desc}), {label}"
-        P.corner_single(x_gt, z_true, lbound, f"{tag}: reference posterior $p(\\mathbf{{z}}|\\mathbf{{m}})$",
-                        "relative posterior density (reference)", os.path.join(out_dir, f"P{pos}_GT.png"))
-        P.corner_single(x_q, z_true, lbound, f"{tag}: estimated posterior, {fam.short}",
-                        f"relative posterior density ({fam.short})", os.path.join(out_dir, f"P{pos}_VAE.png"))
-        label_vae = f"Estimated {fam.short} posterior"
-        P.corner_overlay(x_gt, x_q, z_true, list(range(C.N_DIMS)), lbound, tag,
-                         os.path.join(out_dir, f"P{pos}_Overlay.png"), "7D bridge deck & bearings", label_vae=label_vae)
-        P.corner_overlay(x_gt, x_q, z_true, active_subspace(z_true), lbound, tag,
-                         os.path.join(out_dir, f"P{pos}_ActiveSubspace_Overlay.png"), "Active-damage subspace",
-                         label_vae=label_vae)
-        P.strip_1d(x_gt, x_q, z_true, lbound, os.path.join(out_dir, f"P{pos}_1D.png"), tag,
-                   analytic_pdf=fam.marginal_pdf_z(pos), analytic_label=f"VAE marginal, exact ({fam.name})")
-        P.physical_profile(x_gt, x_q, z_true, lbound, os.path.join(prof_dir, f"Sample_{pos}_UQ_Violin.png"),
-                           tag)
+        if single_corners:
+            tag = f"Sample {pos} ({desc}), {label}"
+            P.corner_single(x_gt, z_true, lbound, f"{tag}: reference posterior $p(\\mathbf{{z}}|\\mathbf{{m}})$",
+                            "relative posterior density (reference)", os.path.join(out_dir, f"P{pos}_GT.png"))
+            P.corner_single(x_q, z_true, lbound, f"{tag}: estimated posterior, {fam.short}",
+                            f"relative posterior density ({fam.short})", os.path.join(out_dir, f"P{pos}_VAE.png"))
+        P.corner_overlay(x_gt, x_q, z_true, list(range(C.N_DIMS)), lbound, os.path.join(out_dir, f"P{pos}_Overlay.png"))
+        P.strip_1d(x_gt, x_q, z_true, lbound, os.path.join(out_dir, f"P{pos}_1D.png"))
+        P.physical_profile(x_q, z_true, lbound, os.path.join(prof_dir, f"Sample_{pos}_UQ_Violin.png"))
 
     df = pd.DataFrame(rows)
     df.to_csv(os.path.join(out_dir, "GT_vs_Posterior_Metrics.csv"), index=False)
@@ -721,27 +761,31 @@ def postprocess_test_set(folder_path, info, split, positions, n_q, n_particles, 
     return df
 
 
-@P.fixed_style
+@P.pub_style
 def plot_benchmark_summary(df, save_path):
     names = C.PARAM_NAMES
     ratio = np.array([[r[f"{n}_VAE_std"] / r[f"{n}_ref_std"] for n in names] for _, r in df.iterrows()])
     dmean = np.array([[r[f"{n}_VAE_mean"] - r[f"{n}_ref_mean"] for n in names] for _, r in df.iterrows()])
-    fig, ax = plt.subplots(1, 2, figsize=(16, 0.5 * len(df) + 2.5), facecolor="white")
-    im = ax[0].imshow(np.log2(ratio), cmap="RdBu_r", vmin=-1.5, vmax=1.5, aspect="auto")
+    fig, ax = plt.subplots(1, 2, figsize=(P.FIG_WIDTH, 0.235 * len(df) + 0.6))
+    fig.subplots_adjust(left=0.055, right=0.96, bottom=0.3 / fig.get_figheight(),
+                        top=1.0 - 0.26 / fig.get_figheight(), wspace=0.28)
+    im = ax[0].imshow(np.log2(ratio), cmap="RdBu_r", vmin=-1.0, vmax=1.0, aspect="auto")
     for (i, j), v in np.ndenumerate(ratio):
-        ax[0].text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=9)
-    ax[0].set_title("std(VAE) / std(reference)   (1 = same width)", fontweight="bold")
-    fig.colorbar(im, ax=ax[0], label="log2 ratio")
+        ax[0].text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=7)
+    ax[0].set_title("(a) std(VAE) / std(reference)")
+    cb = fig.colorbar(im, ax=ax[0], fraction=0.04, pad=0.02)
+    cb.set_label(r"$\log_2$ ratio", fontsize=8.5)
     im = ax[1].imshow(dmean, cmap="RdBu_r", vmin=-0.05, vmax=0.05, aspect="auto")
     for (i, j), v in np.ndenumerate(dmean):
-        ax[1].text(j, i, f"{v:+.3f}", ha="center", va="center", fontsize=9)
-    ax[1].set_title("mean(VAE) - mean(reference)", fontweight="bold")
-    fig.colorbar(im, ax=ax[1], label="difference in z")
+        ax[1].text(j, i, "0.000" if abs(v) < 0.0005 else f"{v:+.3f}", ha="center", va="center", fontsize=7)
+    ax[1].set_title("(b) mean(VAE) $-$ mean(reference)")
+    cb = fig.colorbar(im, ax=ax[1], fraction=0.04, pad=0.02)
+    cb.set_label("difference in $z$", fontsize=8.5)
     for a in ax:
-        a.set_xticks(range(len(names)), names)
-        a.set_yticks(range(len(df)), [f"P{p}" for p in df["pos"]])
-    plt.tight_layout()
-    P.save_figure(fig, save_path)
+        a.set_xticks(range(len(names)), P.LABELS_7D, fontsize=9)
+        a.set_yticks(range(len(df)), [f"P{p}" for p in df["pos"]], fontsize=8)
+        a.tick_params(length=0)
+    P.save_figure(fig, save_path, tight=False)
     plt.close(fig)
 
 
@@ -768,11 +812,14 @@ def main():
     parser.add_argument("--recompute-gt", action="store_true")
     parser.add_argument("--metrics-only", action="store_true",
                         help="only the whole-test-set metrics (no reference posteriors, no corner plots)")
+    parser.add_argument("--single-corners", action="store_true",
+                        help="also write the separate corner plots P*_GT and P*_VAE (the overlays already show both)")
     args, _ = parser.parse_known_args()
     run_folder = args.run_folder or latest_run_folder()
     if args.metrics_only:
         return run_test_metrics(run_folder)
-    run_postprocessing(run_folder, args.positions, args.n_samples, args.n_particles, args.workers, args.recompute_gt)
+    run_postprocessing(run_folder, args.positions, args.n_samples, args.n_particles, args.workers, args.recompute_gt,
+                       args.single_corners)
 
 
 if __name__ == "__main__":

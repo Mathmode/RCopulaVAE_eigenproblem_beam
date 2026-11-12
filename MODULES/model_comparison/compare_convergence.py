@@ -19,7 +19,7 @@ schedule, and writes Output/model_comparison/<data set>/convergence_obs-<obs>/:
 s/epoch: the median of the --timing runs in Output/model_comparison/timing/ (idle GPU) if they exist, otherwise the median
 of the run itself, which depends on what else the GPU was doing.
 
-    python MODULES/model_comparison/compare_convergence.py --data 03Nov_FINAL_GirderBearings_7D_5sensors_5modes --obs fv
+    python MODULES/model_comparison/compare_convergence.py --data 06Nov_FINAL_SlabS10_7D_5sensors_5modes --obs fv
 """
 
 import os
@@ -169,7 +169,7 @@ def plot_convergence(rows, level, clean, out_dir, title):
 
 def main():
     parser = argparse.ArgumentParser(description="Quality against cost of the posterior families.")
-    parser.add_argument("--data", default="03Nov_FINAL_GirderBearings_7D_5sensors_5modes", help="data set folder name")
+    parser.add_argument("--data", default="06Nov_FINAL_SlabS10_7D_5sensors_5modes", help="data set folder name")
     parser.add_argument("--obs", default="fv", help="observed quantities of the runs: fv or f")
     parser.add_argument("--runs", nargs="*", default=None, help="run folders (default: every evaluated run)")
     parser.add_argument("--out-dir", default=None)

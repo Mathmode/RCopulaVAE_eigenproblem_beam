@@ -428,7 +428,7 @@ except as the green dash-dot curve in the 1-D strips.
 | `GC_KSmix_architectures.py` | Your encoder. `a, b = 1 + exp(7 tanh(raw/7))` (smooth, range up to about 1100); the copula head starts at R = I. |
 | `GC_KSmix_models.py` | The VAE with the **correct negative ELBO** (below), a warm-up callback and a best-weights callback. |
 | `main_train_KSVAE.py` | Training script; same output files as before (`Test_predicted_props.npy` keeps the same keys). |
-| `postprocessing.py` | Loss curves, test-set calibration and metrics, and for every benchmark the GT / VAE / overlay / active-subspace corner plots, 1-D strips, violin profiles and a summary heat map. |
+| `postprocessing.py` | Loss curves, test-set calibration and metrics, and for every benchmark the overlay corner plot of all parameters, 1-D strips, violin profiles and a summary heat map. |
 | `plotting.py` | Shared plots. Both posteriors use the same density estimator: reflected KDE on [0.45, 1]; overlays show 50 % / 90 % HPD contours. |
 | `check_consistency.py` | Self-checks (all must PASS). |
 | `diagnose_old_pipeline.py` | Reproduces the diagnosis of §1 on your old run (figures and `diagnosis_report.json`). |
@@ -524,11 +524,14 @@ python MODULES/review29oct_fixed/diagnose_old_pipeline.py
 |---|---|
 | `Training_Loss_Curves.png` | total loss; −ELBO (train/val); E_q[NLL] and its frequency / vertical / rotational terms; entropy and its copula / marginal parts; τ and learning rate |
 | `Global_Test_Metrics.json`, `Fig_calibration.png` | coverage of z* by the exact KS-mixture intervals (zones / bearings), RMSE, interval width, false alarms, detection rate |
-| `GT_Comp/P{pos}_GT.png`, `P{pos}_VAE.png` | single corner plots (your style) |
-| `GT_Comp/P{pos}_Overlay.png`, `P{pos}_ActiveSubspace_Overlay.png` | reference (red) vs VAE (blue), with a statistics table that includes the std ratio |
-| `GT_Comp/P{pos}_1D.png` | 1-D marginals plus the exact KS-mixture density of q |
-| `Physical_PDF_Profiles/Sample_{pos}_UQ_Violin.png` | violin profile along the bridge |
-| `GT_Comp/GT_vs_Posterior_Metrics.csv/.json`, `Fig_benchmark_summary.png` | per-parameter mean and std of both posteriors, std ratio, W1, energy distance, correlation error |
+| `Benchmarks_VAE_vs_reference/P{pos}_Overlay.png` | corner plot of all parameters: reference posterior as shaded density (colour bar) with dashed contours, VAE as solid contours |
+| `Benchmarks_VAE_vs_reference/P{pos}_1D.png` | overlay of the 1-D marginals of both posteriors |
+| `Benchmarks_VAE_vs_reference/P{pos}_GT.png`, `P{pos}_VAE.png` | separate corner plots, only with `--single-corners` |
+| `Benchmarks_violins/Sample_{pos}_UQ_Violin.png` | marginal uncertainty of the VAE posterior per parameter (95 % credible interval, true value) |
+| `Benchmarks_VAE_vs_reference/GT_vs_Posterior_Metrics.csv/.json`, `Fig_benchmark_summary.png` | per-parameter mean and std of both posteriors, std ratio, W1, energy distance, correlation error |
+| `POSTPROCESSING_RUNNING.txt` / `POSTPROCESSING_DONE.txt` | whether the folder is complete: test set B is only written after test set A, so do not copy the folder before `POSTPROCESSING_DONE.txt` appears |
+
+The benchmark and test-set figures are drawn at their printed width (7 in, ASCE), so their font sizes are the printed ones, and they carry no titles or statistics (the scenario of each figure is in `GT_vs_Posterior_Metrics.csv`). The palette is set by the constants at the top of `plotting.py`.
 
 ### Options
 

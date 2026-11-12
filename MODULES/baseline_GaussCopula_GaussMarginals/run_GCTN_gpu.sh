@@ -24,8 +24,8 @@ while [ $# -gt 0 ]; do
 done
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 if [ -n "${CONDA_PREFIX}" ]; then export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH}"; fi
-DATA=Data/03Nov_FINAL_GirderBearings_7D_5sensors_5modes
-TAG=03Nov-FINAL${MODES}modes          # the run name always states the number of modes
+DATA=Data/06Nov_FINAL_SlabS10_7D_5sensors_5modes
+TAG=06Nov-FINAL${MODES}modes          # the run name always states the number of modes
 NAME=GCTN_${TAG}_7D_obs-fv_Gamma1.0_Ep1500
 RUN=Output/baseline_GaussCopula_GaussMarginals/${NAME}
 echo "=== $(date) | GPU ${GPU} | ${MODES} modes | run ${RUN} ==="

@@ -298,9 +298,10 @@ def main():
 
     from MODULES.review29oct_fixed.plotting import physical_profile
     for i, sc in enumerate(scenarios):
-        physical_profile(refs[i], vaes[i] if vaes else refs[i], sc["z_ref"], lb,
+        physical_profile(vaes[i] if vaes else refs[i], sc["z_ref"], lb,
                          os.path.join(out_dir, "violins", f"S{i:02d}_{sc['name']}.png"),
-                         f"Scenario {i}: {sc['label']} (50-element data)")
+                         f"Scenario {i}: {sc['label']} (50-element data)",
+                         label="VAE posterior" if vaes else "Reference posterior")
 
     cols = ["scenario", "ref_detected", "ref_missed", "ref_false_alarms", "ref_zstar_in_95"]
     if vaes:

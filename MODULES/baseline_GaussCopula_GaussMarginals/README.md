@@ -42,3 +42,21 @@ nohup bash MODULES/model_comparison/run_convergence_gpu.sh --family gclogn --hid
 ```
 
 Results: `Output/baseline_GaussCopula_GaussMarginals/GCLogN_03Nov-FINAL5modes_7D_obs-fv_Gamma1.0_Conv6000[_H256-512-256]/`.
+
+## Sensitivity analysis to $\gamma$ (R3.2)
+
+`run_gamma_study_gpu.sh`, `gamma_sensitivity_study.py`: trains GC-TN for $\gamma \in \{0.5, 0.75, 1.0, 1.5, 2.0\}$ ($\gamma^2 \in \{0.25, 0.5625, 1.0, 2.25, 4.0\}$) with identical settings (`--schedule plateau --epochs 6000`, skips $\gamma=1.0$ if already trained), runs post-processing and posterior quality, and writes the validation-set sensitivity tables and figures to `Output/baseline_GaussCopula_GaussMarginals/gamma_study/`.
+
+```bash
+# Run all gammas sequentially on one GPU:
+nohup bash MODULES/baseline_GaussCopula_GaussMarginals/run_gamma_study_gpu.sh --gpu 0 > gamma_study.log 2>&1 &
+
+# Or parallelize across multiple GPUs (one gamma per GPU; gamma=1.0 is already trained):
+nohup bash MODULES/baseline_GaussCopula_GaussMarginals/run_gamma_study_gpu.sh --gpu 0 --gammas "0.5"  > gamma_0p5.log  2>&1 &
+nohup bash MODULES/baseline_GaussCopula_GaussMarginals/run_gamma_study_gpu.sh --gpu 1 --gammas "0.75" > gamma_0p75.log 2>&1 &
+nohup bash MODULES/baseline_GaussCopula_GaussMarginals/run_gamma_study_gpu.sh --gpu 2 --gammas "1.5"  > gamma_1p5.log  2>&1 &
+nohup bash MODULES/baseline_GaussCopula_GaussMarginals/run_gamma_study_gpu.sh --gpu 3 --gammas "2.0"  > gamma_2p0.log  2>&1 &
+
+# Compare once all runs have finished:
+python MODULES/baseline_GaussCopula_GaussMarginals/gamma_sensitivity_study.py
+```

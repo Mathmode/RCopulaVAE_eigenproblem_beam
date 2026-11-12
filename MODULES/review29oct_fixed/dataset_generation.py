@@ -382,9 +382,8 @@ def generate_full_benchmark_datasets(data_dir=C.DATA_DIR, n_train=C.N_TRAIN, n_v
                             "sub-region with the same equivalent zone stiffness"),
         "test_fine_localized_damage": C.TEST_FINE_LOCALIZED_DAMAGE,
         "local_damage_min_stiffness": C.LOCAL_DAMAGE_MIN_STIFFNESS,
-        "structure_description": ("single-span girder line of a steel-concrete composite deck (HEB 600 + 2.0 m x "
-                                  "0.22 m C30/37 slab, 1 800 kg/m, L = 10 m) on laminated elastomeric pads "
-                                  "200 x 300 mm, 3 x 8 mm rubber (EN 1337-3)"),
+        "structure_description": ("bridge S10 of Moliner et al. (2017), Eng. Struct. 132, Tables 2-3: L = 10 m, B = 11.6 m, "
+                                  "h = 0.77 m, nominal E and mass; beam on vertical springs, kappa = 0.05, free end rotations"),
         "model_error_budget": budget,
         "obs_types": C.OBS_TYPES,
         "prior": f"uniform on [{C.LBOUND}, 1]^{C.N_DIMS}",
