@@ -61,14 +61,28 @@ def overlay(x_ref, x_vae, z_true, path, width=3.45):
                     ax.plot(z_true[c], z_true[r], marker="*", color=P.TRUE_COLOR, ms=5, mec="white", mew=0.3,
                             ls="none", zorder=10, clip_on=False)
                     ax.set_ylim(LB, 1)
-                    ax.set_yticks([0.6, 1.0])
+                    ax.set_yticks([0.6, 1.0], ["0.6", "1"])
                 ax.set_xlim(LB, 1)
-                ax.set_xticks([0.6, 1.0])
+                ax.set_xticks([0.6, 1.0], ["0.6", "1"])
                 ax.tick_params(labelbottom=r == n - 1, labelleft=(c == 0 and r > 0))
                 if r == n - 1:
                     ax.set_xlabel(P.LABELS_7D[c])
                 if c == 0 and r > 0:
                     ax.set_ylabel(P.LABELS_7D[r], rotation=0, ha="right", va="center")
+        # legend in the empty upper-right triangle
+        import matplotlib.lines as mlines
+        import matplotlib.patches as mpatches
+        handles = [
+            mpatches.Patch(facecolor=P.REF_FILL, edgecolor=P.REF_LINE, ls=P.REF_DASH, lw=0.6,
+                           label=r"Reference posterior $p(\mathbf{z}\,|\,\mathbf{m})$"),
+            mpatches.Patch(facecolor="#FDCF5F", edgecolor="none", label="Reference posterior: joint density"),
+            mlines.Line2D([], [], color=P.VAE_LINE, lw=1.0, label=r"VAE posterior $q_{\zeta_\theta}(\mathbf{z}\,|\,\mathbf{m})$"),
+            mlines.Line2D([], [], color=P.TRUE_COLOR, lw=0.7, marker="*", ms=5, mec="white", mew=0.3,
+                          label=r"True state $\mathbf{z}^{\mathrm{true}}$"),
+            mlines.Line2D([], [], color="none", label="Contours: 50% and 90% of the mass"),
+        ]
+        fig.legend(handles=handles, loc="upper right", bbox_to_anchor=(1 - right / width, 1 - top / height),
+                   fontsize=7, frameon=False, handlelength=1.6, handletextpad=0.5, labelspacing=0.35, borderaxespad=0)
         fig.savefig(path)
         plt.close(fig)
 

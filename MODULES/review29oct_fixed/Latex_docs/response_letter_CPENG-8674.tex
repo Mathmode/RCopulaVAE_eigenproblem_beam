@@ -99,7 +99,7 @@ We employ this 10-element parameterization to generate the training and validati
 For the test dataset, we employ a finer discretization of the same structure, considering $n_{e} = 50$ elements along the bridge deck, with the same five damage zones, sensor locations, and design of experiments as the training data.
 The instrumentation system is kept the same as in the original manuscript. 
 
-The new case study and its parameterization are described in Section ``Implementaion'' (``Case study and finite element discretrizations'').
+The new case study and its parameterization are described in Section ``Implementation'' (``Case study and finite element discretizations'').
 
 
 %THIS GOES IN R2.
@@ -182,6 +182,7 @@ Could the authors clarify how these two values are related? A value below 80\% f
 some undercoverage. A brief discussion of how the uncertainty intervals are calibrated would therefore be helpful.
 \end{rcomment}
 \begin{response}
+We have updated the abstract to reflect the results obtained for the new case study and highlight the robustness of the proposed approach. 
 We have entirely updated the results section according to the new case study (see ``Case study and finite element discretizations'' subsection) and the corresponding train/validation/test datasets. 
 We must also mention that there was an error in the calculation of the $95\%$ coverage in the submitted version, which produced the undercoverage results. 
 In the updated manuscript, we now include the detailed formulation of the performance metrics (new Appendix ``Performance metrics'') and a dedicated table with the obtained results (Section ``Results and discussion''). 
@@ -536,7 +537,7 @@ corresponding false-positive behavior would further support the manuscript's emp
 
 \underline{New design of experiments:}
 We have generated new train, validation and test datasets with a design of experiments that includes localized damage in one or more zones, including the bearings. 
-The new design of experiments is nox explained in the revised manusicript in Section ``Implementation'' (subsection ``Design of experimentss'').
+The new design of experiments is now explained in the revised manuscript in Section ``Implementation'' (subsection ``Design of experiments'').
 
 A component (a deck zone or a bearing) is considered damaged when its stiffness factor is below the health limit $\eta=0.95$. 
 Every scenario belongs to one of the categories of Table~\ref{tab:doe}, defined by its number of damaged components. 
@@ -1027,7 +1028,7 @@ propagate into the posterior uncertainty bounds for the stiffness reduction fact
 We agree with the reviewer. In the revised study, the mass matrix is no longer perfectly known.
 As described in R1.2, we have included a random perturbation of the mass of each element of the FE model, Eq.~\eqref{eq:modeling_error}, which represents the modeling error.
 The perturbed (true) mass values are used to generate the train, validation and test datasets.
-These true values are hidden: they are not known by the physics-informed VAE, which is fed with the nominal values, considered the known, inexact system properties 
+These true values are hidden: they are not known by the physics-informed VAE, which is fed with the nominal values, considered the known, inexact system properties.
 Hence, during training, the embedded eigenvalue solver uses the nominal mass matrix. 
 
 Together with the mass perturbation, we also account for discretization error by considering a finer discretization in the test dataset compared to that used for train/validation, which introduces additional modeling error. 
@@ -1052,7 +1053,7 @@ set.
 \begin{response}
 In the submitted manuscript, $\gamma$ was selected with the results on the test dataset.
 In the revised manuscript, we now rescale the loss functions with the variance of the data error. 
-Under this calibration, we do not need the weight component $\lambda$ and can by asigning $\gamma= 1$ we obtain adequate results. 
+Under this calibration, we do not need the weight component $\lambda$, and by assigning $\gamma= 1$ we obtain adequate results. 
 %In the revised manuscript, $\gamma$ is no longer tuned: we fix $\gamma=1$, and the test dataset takes no part in the training or in the selection of the model.
 %This is possible because we now calibrate the data terms of the loss function with the variance of their errors.
 %The loss function of the submitted manuscript (Eqs.~(10)--(12)) is:
@@ -1188,7 +1189,7 @@ while training on uniform data? A brief discussion on this decoupling is necessa
 The authors agree with the reviewer that the design of experiments (generative sampling distribution) has nothing to do with the prior distribution based on knowledge about the target features. 
 According to R1.6, we have modified our design of experiments to generate plausible damage scenarios with particular interest in localized damage, rather than distributed damage. 
 
-Regarding the prior knowledgge about the target damage features (stiffness reduction factors), the prior $p(\z)$ represents the knowledge about the stiffness factors before observing the measurements.
+Regarding the prior knowledge about the target damage features (stiffness reduction factors), the prior $p(\z)$ represents the knowledge about the stiffness factors before observing the measurements.
 For a bridge, this knowledge is mostly qualitative, where an admissible interval can be considered for early damage detection. 
 In such cases, extreme losses of stiffness are considered unfeasible values since damage is expected to be identified earlier. 
 We expect severe damage to be less probable than mild damage, but we do not know how this probability decreases with the severity, nor the parameters of such a distribution, which depend on the age, the environment and the maintenance of each structure, and for which statistical data are scarce.

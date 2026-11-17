@@ -209,7 +209,7 @@ def main():
         m10 = np.exp(mu10 + s10 ** 2 / 2) * (norm.cdf(b10 - s10) - norm.cdf(a10 - s10)) / Z10
         print(f"  case {pos} in the 10-element data (uniform damage in each zone): posterior means {np.round(m10, 3)}")
 
-    plt.rcParams.update({"font.family": "serif", "font.size": 9, "mathtext.fontset": "cm"})
+    plt.rcParams.update({"font.family": "serif", "font.size": 9, "mathtext.fontset": "cm", "pdf.fonttype": 42})  # TrueType, no Type 3
     for group, fname in (("well", "Fig_cases_well"), ("fail", "Fig_cases_fail")):
         sel = FIG_CASES[group]
         if len(sel) == 4:

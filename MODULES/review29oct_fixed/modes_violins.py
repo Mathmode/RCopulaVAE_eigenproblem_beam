@@ -36,7 +36,7 @@ for k, run in RUNS.items():
                    hi=np.exp(mu + s * norm.ppf(norm.cdf(a) + 0.975 * Zn)),
                    pd=(norm.cdf((np.log(TAU) - mu) / s) - norm.cdf(a)) / Zn)
 
-plt.rcParams.update({"font.family": "serif", "font.size": 9, "mathtext.fontset": "cm"})
+plt.rcParams.update({"font.family": "serif", "font.size": 9, "mathtext.fontset": "cm", "pdf.fonttype": 42})  # TrueType, no Type 3
 fig, axs = plt.subplots(2, 2, figsize=(7.2, 6.4), sharey=True)
 k = 0
 for r, (pos, desc) in enumerate(CASES.items()):

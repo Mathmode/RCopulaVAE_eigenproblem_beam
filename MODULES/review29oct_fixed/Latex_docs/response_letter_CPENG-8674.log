@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.28 (MiKTeX 25.12) (preloaded format=pdflatex 2026.5.2)  17 NOV 2026 11:36
+This is pdfTeX, Version 3.141592653-2.6-1.40.28 (MiKTeX 25.12) (preloaded format=pdflatex 2026.5.2)  17 NOV 2026 12:29
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -906,55 +906,52 @@ File: umsb.fd 2013/01/14 v3.01 AMS symbols B
 )
 [1
 
-{C:/Users/anafd/AppData/Local/MiKTeX/fonts/map/pdftex/pdftex.map}]
-Overfull \hbox (28.38156pt too wide) in paragraph at lines 184--188
-\OT1/cmr/m/n/10.95 ``Case study and fi-nite el-e-ment dis-cretiza-tions'' sub-s
-ec-tion) and the cor-re-spond-ing train/validation/test
- []
-
-[2] [3{C:/Users/anafd/AppData/Local/Programs/MiKTeX/fonts/enc/dvips/cm-super/cm
--super-ts1.enc}] [4] [5] [6]
-Overfull \hbox (0.67259pt too wide) in paragraph at lines 605--618
+{C:/Users/anafd/AppData/Local/MiKTeX/fonts/map/pdftex/pdftex.map}] [2]
+[3{C:/Users/anafd/AppData/Local/Programs/MiKTeX/fonts/enc/dvips/cm-super/cm-sup
+er-ts1.enc}] [4] [5] [6] [7]
+Overfull \hbox (0.67259pt too wide) in paragraph at lines 606--619
  [][] 
  []
 
-[7] [8]
+[8]
 <figures_final/Fig_cases_well.pdf, id=132, 520.34402pt x 462.52798pt>
 File: figures_final/Fig_cases_well.pdf Graphic file (type pdf)
 <use figures_final/Fig_cases_well.pdf>
 Package pdftex.def Info: figures_final/Fig_cases_well.pdf  used on input line 6
-42.
+43.
 (pdftex.def)             Requested size: 455.24411pt x 404.68275pt.
- [9 <./figures_final/Fig_cases_well.pdf>]
-<figures_final/Fig_cases_fail.pdf, id=226, 520.34402pt x 281.85298pt>
+ [9]
+<figures_final/Fig_cases_fail.pdf, id=138, 520.34402pt x 281.85298pt>
 File: figures_final/Fig_cases_fail.pdf Graphic file (type pdf)
 <use figures_final/Fig_cases_fail.pdf>
 Package pdftex.def Info: figures_final/Fig_cases_fail.pdf  used on input line 6
-54.
+55.
 (pdftex.def)             Requested size: 455.24411pt x 246.60355pt.
- [10 <./figures_final/Fig_cases_fail.pdf>] [11] [12] [13] [14] [15] [16]
-<figures_final/Fig_gamma_validation.pdf, id=396, 520.34402pt x 216.81pt>
+ [10 <./figures_final/Fig_cases_well.pdf>] [11 <./figures_final/Fig_cases_fail.
+pdf>] [12] [13] [14] [15] [16] [17]
+<figures_final/Fig_gamma_validation.pdf, id=402, 520.34402pt x 216.81pt>
 File: figures_final/Fig_gamma_validation.pdf Graphic file (type pdf)
 <use figures_final/Fig_gamma_validation.pdf>
 Package pdftex.def Info: figures_final/Fig_gamma_validation.pdf  used on input 
-line 1145.
+line 1146.
 (pdftex.def)             Requested size: 455.24411pt x 189.69504pt.
- [17 <./figures_final/Fig_gamma_validation.pdf>] [18] [19]
-<figures_final/Fig_modes_violins.pdf, id=481, 520.34402pt x 462.52798pt>
+ [18 <./figures_final/Fig_gamma_validation.pdf>] [19]
+<figures_final/Fig_modes_violins.pdf, id=479, 520.34402pt x 462.52798pt>
 File: figures_final/Fig_modes_violins.pdf Graphic file (type pdf)
 <use figures_final/Fig_modes_violins.pdf>
 Package pdftex.def Info: figures_final/Fig_modes_violins.pdf  used on input lin
-e 1263.
+e 1264.
 (pdftex.def)             Requested size: 455.24411pt x 404.68275pt.
-<figures_final/Fig_modes_corner.pdf, id=485, 505.89pt x 534.79799pt>
+ [20]
+<figures_final/Fig_modes_corner.pdf, id=489, 505.89pt x 534.79799pt>
 File: figures_final/Fig_modes_corner.pdf Graphic file (type pdf)
 <use figures_final/Fig_modes_corner.pdf>
 Package pdftex.def Info: figures_final/Fig_modes_corner.pdf  used on input line
- 1274.
+ 1275.
 (pdftex.def)             Requested size: 455.24411pt x 481.26477pt.
- [20 <./figures_final/Fig_modes_violins.pdf>] [21 <./figures_final/Fig_modes_co
-rner.pdf>] [22] [23] (response_letter_CPENG-8674.bbl
-[24]) [25] (response_letter_CPENG-8674.aux)
+ [21 <./figures_final/Fig_modes_violins.pdf>] [22 <./figures_final/Fig_modes_co
+rner.pdf>] [23] [24] (response_letter_CPENG-8674.bbl
+[25]) [26] (response_letter_CPENG-8674.aux)
  ***********
 LaTeX2e <2025-11-01>
 L3 programming layer <2025-12-24>
@@ -964,9 +961,9 @@ ged.
 (rerunfilecheck)             Checksum: 6F6F3A0D450BED8979B7C98E80926B37;522.
  ) 
 Here is how much of TeX's memory you used:
- 25331 strings out of 467871
- 482964 string characters out of 5418377
- 885512 words of memory out of 5000000
+ 25332 strings out of 467871
+ 482971 string characters out of 5418377
+ 886513 words of memory out of 5000000
  53688 multiletter control sequences out of 15000+600000
  644609 words of font info for 101 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
@@ -1004,9 +1001,9 @@ s/anafd/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmsy9.pfb>
 ti10.pfb><C:/Users/anafd/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfo
 nts/symbols/msbm10.pfb><C:/Users/anafd/AppData/Local/Programs/MiKTeX/fonts/type
 1/public/cm-super/sfrm1095.pfb>
-Output written on response_letter_CPENG-8674.pdf (25 pages, 1115764 bytes).
+Output written on response_letter_CPENG-8674.pdf (26 pages, 1116574 bytes).
 PDF statistics:
- 847 PDF objects out of 1000 (max. 8388607)
- 90 named destinations out of 1000 (max. 500000)
+ 852 PDF objects out of 1000 (max. 8388607)
+ 91 named destinations out of 1000 (max. 500000)
  70 words of extra memory for PDF output out of 10000 (max. 10000000)
 
