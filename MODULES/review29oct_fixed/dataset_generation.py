@@ -94,7 +94,7 @@ def sample_balanced_doe(n_samples, rng, n_dims=C.N_DIMS, fractions=C.SCENARIO_FR
         "single": list(combinations(range(n_dims), 1)),
         "double": list(combinations(range(n_dims), 2)),
         "triple": list(combinations(range(n_dims), 3)),
-        "multi45": list(combinations(range(n_dims), 4)) + list(combinations(range(n_dims), 5)),
+        "multi4plus": [c for k in range(4, n_dims + 1) for c in combinations(range(n_dims), k)],  # 4 or more damaged
     }
     counts = exact_counts(fractions, n_samples)
     z_blocks, cat_blocks = [], []

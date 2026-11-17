@@ -77,22 +77,25 @@ DAMAGE_RANGE = (LBOUND, 0.95) # a damaged parameter: continuous, no gaps, down t
 DAMAGE_THRESHOLD = HEALTHY_RANGE[0]
 # Exact fractions; inside every category each location (5 zones + 2 bearings) or combination
 # of locations gets the same number of samples, and severities are Latin-hypercube stratified.
+# Data generation strategy of 13 Nov 2026 (R1.6): most structures are healthy or have damage at a single location.
+# The 06Nov data set used healthy 10 %, single 30 %, double 25 %, triple 15 %, 4 or 5 damaged 10 %, uniform 10 %.
 SCENARIO_FRACTIONS = {
-    "healthy": 0.10,          # all 7 parameters in HEALTHY_RANGE
+    "healthy": 0.30,          # all 7 parameters in HEALTHY_RANGE
     "single": 0.30,           # 1 damaged parameter   (7 locations, equal counts)
-    "double": 0.25,           # 2 damaged parameters  (21 pairs, equal counts)
-    "triple": 0.15,           # 3 damaged parameters  (35 triples, equal counts)
-    "multi45": 0.10,          # 4 or 5 damaged parameters (56 combinations, equal counts)
+    "double": 0.15,           # 2 damaged parameters  (21 pairs, equal counts)
+    "triple": 0.10,           # 3 damaged parameters  (35 triples, equal counts)
+    "multi4plus": 0.05,       # 4 or more damaged parameters (64 combinations of 4 to 7, equal counts)
     "uniform": 0.10,          # all 7 parameters uniform on [LBOUND, 1] (covers the whole prior box)
 }
 N_TRAIN, N_VAL, N_TEST = 14000, 2400, 1200
 SEEDS = dict(train=101, val=202, test=303, calibration=404, localization=505)
 
-# FINAL data set of the revision (the only one in Data/ once the old ones are removed). The first '_'-separated
-# token of DATASET_VERSION names the training runs (KSVAE_fixed_06Nov-FINAL5modes_7D_...).
-DATA_DIR = os.path.join(PROJECT_ROOT, "Data", "06Nov_FINAL_SlabS10_7D_5sensors_5modes")
+# FINAL data set of the revision since 13 Nov 2026 (data generation strategy above; same structure, sensors, noise,
+# modelling errors and prior as the 06Nov data set 06Nov_FINAL_SlabS10_7D_5sensors_5modes, which only differs in the
+# shares of the damage categories). The first '_'-separated token of DATASET_VERSION names the training runs.
+DATA_DIR = os.path.join(PROJECT_ROOT, "Data", "13Nov_FINAL_SlabS10_7D_DoE30")
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "Output", "review29oct_fixed")
-DATASET_VERSION = "06Nov-FINAL_MolinerS10_kappa005_5sensors_5modes_mass5_localizedTestB"
+DATASET_VERSION = "13Nov-DoE30_MolinerS10_kappa005_5sensors_5modes_mass5_localizedTestB"
 GT_EXAMPLES = [2, 4, 5, 7]    # benchmarks whose reference posteriors are plotted by dataset_generation.py
 
 # --- Benchmark scenarios: positions 0..10 of the test set (0..9 keep the z* of review29oct) ---

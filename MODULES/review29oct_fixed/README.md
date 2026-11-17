@@ -11,6 +11,35 @@ or `Output/review29oct` was modified. The model is still **your** model:
 
 The fixes concern the loss, the "ground truth", the plots and the data.
 
+## 0n. Update (13 Nov): decisions healthy / damaged from the posterior (R1.6), `decision_analysis.py`
+
+For a GC-LogN run, on test set B (`--split test` for A): posterior-mean rule with tau = equal-error-rate threshold on the
+validation set, ROC/AUC and 95 % bootstrap intervals on the test set; probability rule P(z_d < 0.80 | m) > P(z_d >= 0.95 | m)
+with the uniform prior of the training and with a prior P(healthy) = share of healthy components in the training set
+(exact update by importance weights on joint posterior samples, no retraining); probability that each decision is wrong vs
+observed error rate. Outputs in `<run>/decision/` (letter Table R5 and Fig. R1; `--fig-dir` also writes the ROC figure there):
+```
+python MODULES/review29oct_fixed/decision_analysis.py --run Output/baseline_GaussCopula_GaussMarginals/<run> --fig-dir MODULES/review29oct_fixed/Latex_docs/figures_final
+```
+
+## 0m. Update (13 Nov): new data generation strategy ("DoE30", R1.6), the default from now on
+
+`config.SCENARIO_FRACTIONS`: healthy 30 %, damage at one location 30 %, two 15 %, three 10 %, four or more 5 %
+(`multi4plus`: the 64 combinations of 4 to 7 damaged components; it replaces `multi45`, 4 or 5), uniform over the whole
+parameter space 10 %. The 06Nov data set used 10 / 30 / 25 / 15 / 10 / 10 %. Training set: 4,200 healthy, 600 per
+single-damage location, 100 per pair, 40 per triple, 10-11 per combination of four or more, 1,400 uniform. New data set
+`Data/13Nov_FINAL_SlabS10_7D_DoE30` (version `13Nov-DoE30_...`); everything else (structure, sensors, noise, modelling
+errors, prior, model, training settings) is unchanged. The previous `config.py`, `dataset_generation.py` and README are
+in `MODULES/_backup_DoE30_13Nov/` (and the original `config.py` in `MODULES/_backup_config_DoE2_13Nov/`).
+
+`MODULES/baseline_GaussCopula_GaussMarginals/run_GCLogN_DoE30_gpu.sh --gpu N [--stage data|eigen|surrogate|budget|all]`
+(it calls `main_train_GCLogN.py` of that folder with the arguments of the reference run): data set (CPU), proposed model (GC-LogN +
+eigenvalue solver, about 32 min on the 06Nov data), Ref. 41 with the full training set (surrogate about 10 min + VAE
+about 17 min) and with 500 simulations (about 15 min), each with post-processing and posterior quality; finished steps
+are skipped, and a data folder of another version is never reused. Not included: `identifiability_setups.py` (R3.4)
+writes to a fixed folder and would overwrite the 06Nov results; the case analysis and the letter figures
+(`test_case_analysis.py`, `selected_cases_figures.py`) still point to the 06Nov run.
+
 ## 0l. Update (5 Nov, later): variant with truncated-Gaussian mixture marginals
 
 `MODULES/variant_GaussCopula_GaussMixMarginals` (GC-GMix; `posterior_families.GMixCopula`): the proposed model with truncated

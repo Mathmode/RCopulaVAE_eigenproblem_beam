@@ -43,6 +43,22 @@ nohup bash MODULES/model_comparison/run_convergence_gpu.sh --family gclogn --hid
 
 Results: `Output/baseline_GaussCopula_GaussMarginals/GCLogN_03Nov-FINAL5modes_7D_obs-fv_Gamma1.0_Conv6000[_H256-512-256]/`.
 
+### GC-LogN on the data generation strategy of 13 Nov 2026 (DoE30)
+
+`run_GCLogN_DoE30_gpu.sh`: the same `main_train_GCLogN.py`, arguments and defaults as the reference run
+`GCLogN_06Nov-5modes_7D_Gamma1.0_Conv6000` (family GC-LogN, encoder 128-256-128, 75,306 parameters, gamma = 1, plateau
+schedule, 6000-epoch cap, seed 1234), on the new data set `Data/13Nov_FINAL_SlabS10_7D_DoE30` (healthy 30 %, one damaged
+component 30 %, two 15 %, three 10 %, four or more 5 %, uniform 10 %; `review29oct_fixed/config.py`). Stages: `data`
+(data generation, CPU), `eigen` (training, post-processing, posterior quality), `surrogate` and `budget` (Ref. 41, R1.4).
+
+```bash
+# (a) data set, then (b) training of GC-LogN with the eigenvalue solver, from the project root:
+nohup bash MODULES/baseline_GaussCopula_GaussMarginals/run_GCLogN_DoE30_gpu.sh --gpu 2 --stage data > DoE30_data.log 2>&1 &
+nohup bash MODULES/baseline_GaussCopula_GaussMarginals/run_GCLogN_DoE30_gpu.sh --gpu 2 --stage eigen > DoE30_eigen.log 2>&1 &
+```
+
+Results: `Output/baseline_GaussCopula_GaussMarginals/GCLogN_13Nov-DoE30_7D_Gamma1.0_Conv6000/`.
+
 ## Sensitivity analysis to $\gamma$ (R3.2)
 
 `run_gamma_study_gpu.sh`, `gamma_sensitivity_study.py`: trains GC-TN for $\gamma \in \{0.5, 0.75, 1.0, 1.5, 2.0\}$ ($\gamma^2 \in \{0.25, 0.5625, 1.0, 2.25, 4.0\}$) with identical settings (`--schedule plateau --epochs 6000`, skips $\gamma=1.0$ if already trained), runs post-processing and posterior quality, and writes the validation-set sensitivity tables and figures to `Output/baseline_GaussCopula_GaussMarginals/gamma_study/`.

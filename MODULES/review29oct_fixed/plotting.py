@@ -46,8 +46,8 @@ TRUE_COLOR = "#C1121F"
 TRUE_EDGE = "white"
 REF_CMAP = mcolors.LinearSegmentedColormap.from_list("reference_density", ["#FFFFFF", "#FFF2B8", "#FDCF5F", "#F2A32C"])
 REF_LABEL = r"Reference posterior $p(\mathbf{z}\,|\,\mathbf{m})$"
-VAE_LABEL = r"VAE posterior $q_\phi(\mathbf{z}\,|\,\mathbf{m})$"
-TRUE_LABEL = r"True state $\mathbf{z}^*$"
+VAE_LABEL = r"VAE posterior $q_{\zeta_{\theta}}(\mathbf{z}\,|\,\mathbf{m})$"
+TRUE_LABEL = r"True state $\mathbf{z}^{\mathrm{true}}$"
 GROUP_COLORS = {"deck": "#0072B2", "bearings": "#E69F00"}   # deck zones / bearings (Okabe-Ito, colour-blind safe)
 
 
@@ -190,7 +190,7 @@ def corner_single(samples, z_true, lb, title, cbar_label, save_path, cmap="virid
         cax = fig.add_axes([0.87, 0.55, 0.02, 0.35])
         cb = fig.colorbar(cf, cax=cax, ticks=[0, 0.25, 0.5, 0.75, 1.0])
         cb.set_label(cbar_label, fontsize=13)
-    gt_marker = mlines.Line2D([], [], color=RED, marker="*", ls="--", ms=13, mec="white", label=r"True state $\mathbf{z}^*$")
+    gt_marker = mlines.Line2D([], [], color=RED, marker="*", ls="--", ms=13, mec="white", label=r"True state $\mathbf{z}^{\mathrm{true}}$")
     fig.legend(handles=[gt_marker], loc="upper right", bbox_to_anchor=(0.86, 0.97), fontsize=13)
     fig.suptitle(title, fontsize=15, fontweight="bold", y=0.995)
     fig.subplots_adjust(left=0.07, right=0.85, bottom=0.06, top=0.94, wspace=0.12, hspace=0.12)
